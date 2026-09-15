@@ -40,7 +40,15 @@ import { useLeadsData } from '@/hooks/useLeadsData';
 export default function LeadsPage() {
   const navigate = useNavigate();
   const { leads: liveLeads } = useLeadsData();
-  const { filters, setSearch, toggleStatus, toggleChannel, resetFilters } = useLeadsStore();
+  const {
+    filters,
+    setSearch,
+    toggleStatus,
+    toggleChannel,
+    resetFilters,
+    loadDemoLeads,
+    clearAllLeads,
+  } = useLeadsStore();
 
   const filteredLeads = useMemo(() => {
     return liveLeads.filter((lead) => {
@@ -124,9 +132,20 @@ export default function LeadsPage() {
             )}
           </h2>
         </div>
-        <Button onClick={() => setShowDrawer(true)}>
-          <Plus className="w-4 h-4" /> Add Lead
-        </Button>
+        <div className="flex items-center gap-2">
+          {liveLeads.length === 0 ? (
+            <Button variant="secondary" size="sm" onClick={loadDemoLeads} className="text-xs">
+              ✨ Load Sample Leads
+            </Button>
+          ) : (
+            <Button variant="ghost" size="sm" onClick={clearAllLeads} className="text-xs text-slate-500 hover:text-red-400">
+              Clear All Leads
+            </Button>
+          )}
+          <Button onClick={() => setShowDrawer(true)}>
+            <Plus className="w-4 h-4" /> Add Lead
+          </Button>
+        </div>
       </div>
 
       {/* Search + Filter bar */}
@@ -247,15 +266,37 @@ export default function LeadsPage() {
               {pageLeads.length === 0 ? (
                 <tr>
                   <td colSpan={6} className="px-4 py-16 text-center">
-                    <div className="flex flex-col items-center gap-3">
-                      <div className="w-12 h-12 rounded-xl bg-navy-700 flex items-center justify-center text-2xl">
-                        🔍
+                    {liveLeads.length === 0 ? (
+                      <div className="flex flex-col items-center gap-3 max-w-sm mx-auto">
+                        <div className="w-14 h-14 rounded-2xl bg-violet-500/10 border border-violet-500/20 text-violet-400 flex items-center justify-center text-2xl">
+                          👥
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-slate-200">No leads in your pipeline yet</p>
+                          <p className="text-xs text-slate-400 mt-1">
+                            Add a new lead manually or connect WhatsApp/Telegram in Settings to receive leads automatically.
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 pt-2">
+                          <Button size="sm" onClick={() => setShowDrawer(true)}>
+                            <Plus className="w-3.5 h-3.5 mr-1" /> Add Lead
+                          </Button>
+                          <Button size="sm" variant="secondary" onClick={loadDemoLeads}>
+                            ✨ Load Sample Data
+                          </Button>
+                        </div>
                       </div>
-                      <p className="text-sm text-slate-500">No leads match your filters</p>
-                      <Button variant="ghost" size="sm" onClick={resetFilters}>
-                        Clear filters
-                      </Button>
-                    </div>
+                    ) : (
+                      <div className="flex flex-col items-center gap-3">
+                        <div className="w-12 h-12 rounded-xl bg-navy-700 flex items-center justify-center text-2xl">
+                          🔍
+                        </div>
+                        <p className="text-sm text-slate-500">No leads match your filters</p>
+                        <Button variant="ghost" size="sm" onClick={resetFilters}>
+                          Clear filters
+                        </Button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ) : (
