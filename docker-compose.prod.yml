@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: qwalify_frontend
+    restart: unless-stopped
+    networks:
+      - root_default
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.qwalify.rule=Host(`qwalify.online`) || Host(`www.qwalify.online`)"
+      - "traefik.http.routers.qwalify.entrypoints=websecure"
+      - "traefik.http.routers.qwalify.tls=true"
+      - "traefik.http.routers.qwalify.tls.certresolver=letsencrypt"
+      - "traefik.http.services.qwalify.loadbalancer.server.port=80"
+
+networks:
+  root_default:
+    external: true
