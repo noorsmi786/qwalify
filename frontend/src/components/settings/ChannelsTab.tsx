@@ -81,8 +81,8 @@ const CHANNELS: ChannelDef[] = [
 
 function WhatsAppPanel() {
   const { tenant } = useAuthStore();
-  const [evolutionUrl, setEvolutionUrl] = useState('http://localhost:8080');
-  const [apiKey, setApiKey] = useState('qwalify_secret_key');
+  const [evolutionUrl, setEvolutionUrl] = useState('https://api.nexwa.online');
+  const [apiKey, setApiKey] = useState('Zainab$1212Noor@1212');
   const [instanceName, setInstanceName] = useState('qwalify-main');
   const [isConnected, setIsConnected] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -133,7 +133,7 @@ function WhatsAppPanel() {
         body: JSON.stringify({
           instanceName,
           qrcode: true,
-          integration: 'WHATSAPP_BAILEYS',
+          integration: 'WHATSAPP-BAILEYS',
         }),
       }).catch(() => null);
 
