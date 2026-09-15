@@ -24,6 +24,25 @@ services:
       - "traefik.http.routers.qwalify-http.entrypoints=web"
       - "traefik.http.routers.qwalify-http.middlewares=redirect-to-https"
 
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: qwalify_backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - root_default
+    labels:
+      - "traefik.enable=true"
+      - "traefik.docker.network=root_default"
+      - "traefik.http.routers.qwalify-backend.rule=(Host(`qwalify.online`) || Host(`www.qwalify.online`)) && (PathPrefix(`/webhook`) || PathPrefix(`/api`))"
+      - "traefik.http.routers.qwalify-backend.entrypoints=websecure"
+      - "traefik.http.routers.qwalify-backend.tls=true"
+      - "traefik.http.routers.qwalify-backend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.qwalify-backend.loadbalancer.server.port=3001"
+
 networks:
   root_default:
     external: true
