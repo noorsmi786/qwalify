@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Link2,
   CheckCircle2,
@@ -314,7 +314,6 @@ function TelegramPanel() {
   const [botToken, setBotToken] = useState('');
   const [botInfo, setBotInfo] = useState<{ username: string; first_name: string } | null>(null);
   const [isVerifying, setIsVerifying] = useState(false);
-  const [isRegistering, setIsRegistering] = useState(false);
 
   // Live Polling Listener State
   const [isListening, setIsListening] = useState(false);
@@ -470,37 +469,7 @@ function TelegramPanel() {
     };
   }, [isListening, botToken, configs, activeProvider, tenant]);
 
-  const handleRegisterWebhook = async () => {
-    if (!botToken) {
-      toast.error('Please enter your Bot Token first.');
-      return;
-    }
-    if (!isCloudSupabase) {
-      toast.info('Webhooks require a live public domain. Click "Start Live Bot Listener" below to test Telegram directly on localhost!');
-      return;
-    }
-    setIsRegistering(true);
-    try {
-      const res = await fetch(
-        `https://api.telegram.org/bot${botToken}/setWebhook`,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ url: webhookUrl }),
-        }
-      );
-      const data = await res.json();
-      if (data.ok) {
-        toast.success('Webhook registered with Telegram successfully! 🎉');
-      } else {
-        toast.error(`Telegram error: ${data.description}`);
-      }
-    } catch {
-      toast.error('Failed to register webhook. Check your Bot Token.');
-    } finally {
-      setIsRegistering(false);
-    }
-  };
+
 
   const handleSimulateTelegramInbound = async (e: React.FormEvent) => {
     e.preventDefault();
