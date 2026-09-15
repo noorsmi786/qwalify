@@ -3,8 +3,6 @@ import {
   Link2,
   CheckCircle2,
   QrCode,
-  Radio,
-  Server,
   Key,
   Bot,
   ExternalLink,
@@ -79,51 +77,60 @@ const CHANNELS: ChannelDef[] = [
 
 // ─── WhatsApp Config Panel ────────────────────────────────────────────────────
 
+// ─── WhatsApp Config Panel ────────────────────────────────────────────────────
+
 function WhatsAppPanel() {
   const { tenant } = useAuthStore();
-  const [evolutionUrl, setEvolutionUrl] = useState('https://api.nexwa.online');
-  const [apiKey, setApiKey] = useState('Zainab$1212Noor@1212');
-  const [instanceName, setInstanceName] = useState('qwalify-main');
-  const [isConnected, setIsConnected] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const evolutionUrl = 'https://api.nexwa.online';
+  const apiKey = 'Zainab$1212Noor@1212';
+  const instanceName = tenant?.slug ? `tenant-${tenant.slug}` : 'qwalify-main';
+
+  const [connectionState, setConnectionState] = useState<'disconnected' | 'connecting' | 'connected'>('disconnected');
+  const [phoneNumber, setPhoneNumber] = useState<string | null>(null);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [isLoadingQr, setIsLoadingQr] = useState(false);
+  const [isCheckingStatus, setIsCheckingStatus] = useState(false);
 
   // Test Simulator State
-  const [testMessage, setTestMessage] = useState('Hi! We are looking for AI lead qualification for 15 reps. Budget is around $3k/mo.');
+  const [testMessage, setTestMessage] = useState('Hi! I need lead qualification for my sales team.');
   const [isSimulating, setIsSimulating] = useState(false);
   const [simReply, setSimReply] = useState<string | null>(null);
 
-  const webhookUrl = `https://your-project.supabase.co/functions/v1/whatsapp-webhook`;
-
-  const handleSave = async () => {
-    if (!evolutionUrl || !apiKey) {
-      toast.error('Please provide both Evolution API Server URL and API Key.');
-      return;
+  // Check initial connection status on load
+  const checkStatus = async () => {
+    setIsCheckingStatus(true);
+    try {
+      const res = await fetch(`${evolutionUrl}/instance/connectionState/${instanceName}`, {
+        headers: { apikey: apiKey },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.instance?.state === 'open') {
+          setConnectionState('connected');
+          setPhoneNumber(data?.instance?.owner || '+Connected');
+          setQrCode(null);
+        } else {
+          setConnectionState('disconnected');
+        }
+      }
+    } catch {
+      // offline or not created
+    } finally {
+      setIsCheckingStatus(false);
     }
-    setIsSaving(true);
-
-    if (isSupabaseConfigured && tenant?.id) {
-      await supabase.from('channel_connections').upsert({
-        tenant_id: tenant.id,
-        channel: 'whatsapp',
-        status: 'connected',
-        config: { api_url: evolutionUrl, api_key: apiKey, instance_name: instanceName },
-        connected_at: new Date().toISOString(),
-      }, { onConflict: 'tenant_id, channel' });
-    }
-
-    await new Promise((r) => setTimeout(r, 500));
-    setIsSaving(false);
-    setIsConnected(true);
-    toast.success('WhatsApp Evolution API instance configured!');
   };
+
+  useEffect(() => {
+    checkStatus();
+  }, [instanceName]);
 
   const handleFetchQr = async () => {
     setIsLoadingQr(true);
     setQrCode(null);
+    setConnectionState('connecting');
+
     try {
-      // 1. Try to create instance first
+      // 1. Ensure instance exists
       await fetch(`${evolutionUrl}/instance/create`, {
         method: 'POST',
         headers: {
@@ -147,21 +154,35 @@ function WhatsAppPanel() {
       const data = await res.json();
       if (data?.base64) {
         setQrCode(data.base64);
-        toast.success('QR Code ready! Scan with WhatsApp.');
+        toast.success('QR Code ready! Scan with your WhatsApp app.');
       } else if (data?.code) {
         setQrCode(data.code);
         toast.success('QR Code ready!');
+      } else if (data?.instance?.state === 'open') {
+        setConnectionState('connected');
+        toast.success('WhatsApp is already connected!');
       } else {
-        toast.info(data?.message || 'Instance already connected or generating QR.');
+        toast.info('Generating QR code, please wait a moment...');
       }
     } catch {
-      toast.error(
-        'Could not reach Evolution API at ' +
-          evolutionUrl +
-          '. If running locally, make sure Docker is started on port 8080.'
-      );
+      toast.error('Could not connect to WhatsApp service. Please try again.');
     } finally {
       setIsLoadingQr(false);
+    }
+  };
+
+  const handleDisconnect = async () => {
+    try {
+      await fetch(`${evolutionUrl}/instance/logout/${instanceName}`, {
+        method: 'DELETE',
+        headers: { apikey: apiKey },
+      });
+      setConnectionState('disconnected');
+      setQrCode(null);
+      setPhoneNumber(null);
+      toast.success('WhatsApp number disconnected.');
+    } catch {
+      toast.error('Failed to disconnect WhatsApp.');
     }
   };
 
@@ -173,11 +194,11 @@ function WhatsAppPanel() {
     setSimReply(null);
 
     try {
-      await new Promise((r) => setTimeout(r, 900));
+      await new Promise((r) => setTimeout(r, 750));
       setSimReply(
-        `[WhatsApp AI Response] Hi there! 👋 Thanks for reaching out. We can definitely help your 15 reps automate lead qualification within your $3k budget. What is your preferred launch timeline?`
+        `[WhatsApp AI SDR] Hi there! 👋 Thanks for reaching out. We can automate your lead qualification and appointment booking directly over WhatsApp. How many leads do you typically receive each week?`
       );
-      toast.success('WhatsApp inbound message processed & qualified!');
+      toast.success('AI qualification response simulated!');
     } finally {
       setIsSimulating(false);
     }
@@ -185,122 +206,148 @@ function WhatsAppPanel() {
 
   return (
     <div className="mt-4 pt-4 border-t border-navy-700/80 space-y-6">
-      {/* Quick Setup Notice */}
-      <div className="p-3.5 rounded-xl bg-green-500/10 border border-green-500/20 text-xs text-slate-300 space-y-1.5 leading-relaxed">
-        <p className="font-semibold text-green-400 flex items-center gap-1.5">
-          💬 How to Connect WhatsApp via Evolution API:
-        </p>
-        <p className="text-slate-400">
-          Evolution API is an open-source WhatsApp gateway. You can run it on your VPS (via our included <code className="text-green-300 bg-navy-950 px-1 py-0.5 rounded">docker-compose.yml</code>) or run it locally in 1 command:
-        </p>
-        <div className="p-2 rounded bg-navy-950 border border-navy-800 text-[11px] font-mono text-teal-300 select-all">
-          docker run -d -p 8080:8080 --name evolution-api atendai/evolution-api:v1.8.2
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {/* Credentials Form */}
-        <div className="space-y-3">
-          <Input
-            label="Evolution API Server URL"
-            placeholder="http://localhost:8080 or https://wa.qwalify.online"
-            value={evolutionUrl}
-            onChange={(e) => setEvolutionUrl(e.target.value)}
-            icon={<Server className="w-4 h-4" />}
-          />
-          <Input
-            label="API Key / Token"
-            type="password"
-            placeholder="Your Evolution API global key"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            icon={<Key className="w-4 h-4" />}
-          />
-          <Input
-            label="Instance Name"
-            placeholder="qwalify-instance"
-            value={instanceName}
-            onChange={(e) => setInstanceName(e.target.value)}
-            icon={<Radio className="w-4 h-4" />}
-          />
-
-          <div className="flex gap-2 pt-1">
-            <Button size="sm" onClick={handleSave} loading={isSaving} className="flex-1">
-              {isConnected ? 'Update Config' : 'Save Connection'}
-            </Button>
-            <Button
-              size="sm"
-              variant="secondary"
-              onClick={handleFetchQr}
-              loading={isLoadingQr}
-              className="flex-1"
-            >
-              <QrCode className="w-3.5 h-3.5 mr-1" /> Get QR Code
-            </Button>
-          </div>
-
-          {qrCode && (
-            <div className="p-4 rounded-xl bg-white flex flex-col items-center justify-center space-y-2 mt-2">
-              <img src={qrCode} alt="WhatsApp QR Code" className="w-48 h-48" />
-              <p className="text-[11px] text-slate-800 font-medium text-center">
-                Scan with WhatsApp → Linked Devices
-              </p>
-            </div>
-          )}
-        </div>
-
-        {/* Webhook & Inbound Simulator */}
-        <div className="space-y-4">
-          <div className="p-4 rounded-xl bg-navy-900/90 border border-navy-700 space-y-3 flex flex-col">
-            <div>
-              <p className="text-xs font-semibold text-slate-200 flex items-center gap-1.5 mb-1">
-                <QrCode className="w-3.5 h-3.5 text-teal-400" /> Webhook URL
-              </p>
-              <p className="text-xs text-slate-400 mb-2">Register this in Evolution API → Webhooks:</p>
-              <div className="flex items-center gap-1">
-                <code className="flex-1 text-[10px] font-mono text-teal-300 bg-navy-950 border border-navy-800 rounded px-2 py-1.5 break-all leading-relaxed">
-                  {webhookUrl}
-                </code>
-                <button
-                  type="button"
-                  onClick={() => { navigator.clipboard.writeText(webhookUrl); toast.success('Copied!'); }}
-                  className="p-1.5 rounded hover:bg-navy-700 text-slate-400 hover:text-slate-200 transition-colors flex-shrink-0"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                </button>
+      {/* Connected State */}
+      {connectionState === 'connected' ? (
+        <div className="p-5 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 space-y-4">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="w-12 h-12 rounded-2xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center text-2xl">
+                📱
+              </div>
+              <div>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="font-semibold text-slate-100 text-sm">WhatsApp Number Connected</span>
+                  {phoneNumber && (
+                    <span className="text-xs font-mono text-emerald-300 bg-emerald-950/60 border border-emerald-500/30 px-2 py-0.5 rounded-md">
+                      {phoneNumber}
+                    </span>
+                  )}
+                  <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 font-semibold flex items-center gap-1">
+                    <CheckCircle2 className="w-3 h-3" /> Live & Ready
+                  </span>
+                </div>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  AI assistant is actively listening and responding to incoming leads on WhatsApp.
+                </p>
               </div>
             </div>
-            <div className="border-t border-navy-800 pt-2 flex items-center justify-between text-[11px] text-slate-500">
-              <span>Required Event:</span>
-              <span className="font-mono text-slate-300 font-bold">MESSAGES_UPSERT</span>
+
+            <Button
+              size="sm"
+              variant="danger"
+              onClick={handleDisconnect}
+              className="text-xs"
+            >
+              Disconnect Number
+            </Button>
+          </div>
+        </div>
+      ) : (
+        /* Disconnected / Connect State */
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+          {/* QR Code & Connect Action */}
+          <div className="p-5 rounded-2xl bg-navy-900/90 border border-navy-700 space-y-4 flex flex-col justify-between">
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-semibold text-slate-200 flex items-center gap-2">
+                  <QrCode className="w-4 h-4 text-emerald-400" /> Link WhatsApp Account
+                </p>
+                <span className="text-[11px] text-slate-400 font-medium">Step 1 of 1</span>
+              </div>
+
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Connect your business WhatsApp number so your AI SDR can qualify incoming inquiries, answer questions, and schedule meetings.
+              </p>
+
+              <ol className="space-y-2 text-xs text-slate-300 pl-1">
+                <li className="flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-navy-800 border border-navy-600 flex items-center justify-center text-[11px] font-bold text-emerald-400 flex-shrink-0">1</span>
+                  Click <strong>"Generate QR Code"</strong> below.
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-navy-800 border border-navy-600 flex items-center justify-center text-[11px] font-bold text-emerald-400 flex-shrink-0">2</span>
+                  Open <strong>WhatsApp</strong> on your phone.
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-navy-800 border border-navy-600 flex items-center justify-center text-[11px] font-bold text-emerald-400 flex-shrink-0">3</span>
+                  Tap <strong>Settings → Linked Devices → Link a Device</strong>.
+                </li>
+                <li className="flex items-center gap-2">
+                  <span className="w-5 h-5 rounded-full bg-navy-800 border border-navy-600 flex items-center justify-center text-[11px] font-bold text-emerald-400 flex-shrink-0">4</span>
+                  Scan the QR code displayed on screen.
+                </li>
+              </ol>
+            </div>
+
+            <div className="pt-2">
+              <Button
+                onClick={handleFetchQr}
+                loading={isLoadingQr}
+                className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-medium"
+              >
+                <QrCode className="w-4 h-4 mr-1.5" />
+                {qrCode ? 'Refresh QR Code' : 'Generate QR Code'}
+              </Button>
             </div>
           </div>
 
-          {/* Test WhatsApp Inbound Simulator */}
-          <div className="p-4 rounded-xl bg-navy-900/80 border border-navy-700 space-y-3">
-            <p className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
-              ⚡ Test WhatsApp Lead Inbound
-            </p>
-            <form onSubmit={handleSimulateWhatsAppInbound} className="space-y-2">
-              <input
-                type="text"
-                placeholder="Prospect WhatsApp message..."
-                value={testMessage}
-                onChange={(e) => setTestMessage(e.target.value)}
-                className="w-full bg-navy-950 border border-navy-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-green-500"
-              />
-              <Button size="sm" type="submit" loading={isSimulating} className="w-full text-xs">
-                Simulate Inbound WhatsApp Turn
-              </Button>
-            </form>
-
-            {simReply && (
-              <div className="p-2.5 rounded-lg bg-green-500/10 border border-green-500/20 text-xs text-green-300 leading-relaxed">
-                {simReply}
+          {/* QR Code Display Card */}
+          <div className="p-5 rounded-2xl bg-navy-900/90 border border-navy-700 flex flex-col items-center justify-center min-h-[260px] text-center">
+            {qrCode ? (
+              <div className="space-y-3 flex flex-col items-center">
+                <div className="p-3 bg-white rounded-2xl shadow-xl shadow-black/40">
+                  <img src={qrCode} alt="WhatsApp QR Code" className="w-48 h-48 rounded-lg" />
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-slate-200">Point your phone camera here</p>
+                  <p className="text-[11px] text-slate-400 mt-0.5">WhatsApp → Linked Devices → Link a Device</p>
+                </div>
+                <Button size="sm" variant="ghost" onClick={checkStatus} loading={isCheckingStatus} className="text-xs text-emerald-400 hover:text-emerald-300">
+                  Check Connection Status
+                </Button>
+              </div>
+            ) : (
+              <div className="space-y-3 py-6">
+                <div className="w-16 h-16 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center text-3xl mx-auto">
+                  💬
+                </div>
+                <p className="text-sm font-medium text-slate-200">No Device Connected Yet</p>
+                <p className="text-xs text-slate-400 max-w-xs mx-auto">
+                  Click "Generate QR Code" to pair your WhatsApp number with your Qwalify AI agent.
+                </p>
               </div>
             )}
           </div>
         </div>
+      )}
+
+      {/* Interactive AI Lead Turn Simulator */}
+      <div className="p-5 rounded-2xl bg-navy-900/80 border border-navy-700 space-y-3">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-semibold text-slate-200 flex items-center gap-2">
+            ⚡ Test WhatsApp AI Lead Interaction
+          </p>
+          <span className="text-[11px] text-emerald-400 font-medium">Interactive Preview</span>
+        </div>
+        <form onSubmit={handleSimulateWhatsAppInbound} className="flex gap-2">
+          <input
+            type="text"
+            placeholder="Type a sample prospect message (e.g. 'Looking for pricing and demo')..."
+            value={testMessage}
+            onChange={(e) => setTestMessage(e.target.value)}
+            className="flex-1 bg-navy-950 border border-navy-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+          />
+          <Button size="sm" type="submit" loading={isSimulating} className="text-xs bg-emerald-600 hover:bg-emerald-500">
+            Simulate
+          </Button>
+        </form>
+
+        {simReply && (
+          <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-xs text-emerald-300 leading-relaxed flex items-start gap-2">
+            <span className="text-base">🤖</span>
+            <span>{simReply}</span>
+          </div>
+        )}
       </div>
     </div>
   );
