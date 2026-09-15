@@ -21,6 +21,12 @@ const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', service: 'qwalify-webhook-engine', timestamp: new Date().toISOString() });
 });
+app.get('/webhook/health', (req, res) => {
+  res.json({ status: 'ok', service: 'qwalify-webhook-engine', timestamp: new Date().toISOString() });
+});
+app.get('/api/health', (req, res) => {
+  res.json({ status: 'ok', service: 'qwalify-webhook-engine', timestamp: new Date().toISOString() });
+});
 
 // Helper: Call AI provider (Gemini, OpenAI, Groq, OpenRouter)
 async function generateAIResponse({ provider, apiKey, model, context, conversationHistory, latestMessage }) {

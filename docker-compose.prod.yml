@@ -38,6 +38,7 @@ services:
       - "traefik.enable=true"
       - "traefik.docker.network=root_default"
       - "traefik.http.routers.qwalify-backend.rule=(Host(`qwalify.online`) || Host(`www.qwalify.online`)) && (PathPrefix(`/webhook`) || PathPrefix(`/api`))"
+      - "traefik.http.routers.qwalify-backend.priority=100"
       - "traefik.http.routers.qwalify-backend.entrypoints=websecure"
       - "traefik.http.routers.qwalify-backend.tls=true"
       - "traefik.http.routers.qwalify-backend.tls.certresolver=letsencrypt"
