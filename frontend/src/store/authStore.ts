@@ -107,11 +107,20 @@ export const useAuthStore = create<AuthState>()(
           }
 
           if (data.user) {
-            const { data: profile } = await supabase
-              .from('user_profiles')
-              .select('*')
-              .eq('id', data.user.id)
-              .maybeSingle();
+            // Fetch profile and tenant with retry for trigger completion
+            let profile = null;
+            for (let i = 0; i < 4; i++) {
+              const { data: p } = await supabase
+                .from('user_profiles')
+                .select('*')
+                .eq('id', data.user.id)
+                .maybeSingle();
+              if (p) {
+                profile = p;
+                break;
+              }
+              await new Promise((r) => setTimeout(r, 400));
+            }
 
             if (profile) {
               const { data: tenantData } = await supabase
@@ -145,14 +154,19 @@ export const useAuthStore = create<AuthState>()(
           }
         }
 
-        // Mock Fallback
-        await new Promise((r) => setTimeout(r, 600));
-        set({
-          isLoading: false,
-          user: { ...DEFAULT_MOCK_USER, email },
-          tenant: DEFAULT_MOCK_TENANT,
-          isAuthenticated: true,
-        });
+        // Mock Fallback ONLY if Supabase is NOT configured
+        if (!isSupabaseConfigured) {
+          await new Promise((r) => setTimeout(r, 600));
+          set({
+            isLoading: false,
+            user: { ...DEFAULT_MOCK_USER, email },
+            tenant: DEFAULT_MOCK_TENANT,
+            isAuthenticated: true,
+          });
+        } else {
+          set({ isLoading: false });
+          throw new Error('User profile not found in database. Please verify your email.');
+        }
       },
 
       signup: async (email: string, password: string, companyName: string) => {
@@ -176,14 +190,31 @@ export const useAuthStore = create<AuthState>()(
           }
 
           if (data.user) {
-            // Give DB trigger a moment to run
-            await new Promise((r) => setTimeout(r, 600));
+            // If no session returned (e.g. email confirmation required or timing), try signIn
+            if (!data.session) {
+              const { data: signData } = await supabase.auth.signInWithPassword({
+                email,
+                password,
+              }).catch(() => ({ data: null }));
+              if (signData?.session) {
+                data.session = signData.session;
+              }
+            }
 
-            const { data: profile } = await supabase
-              .from('user_profiles')
-              .select('*')
-              .eq('id', data.user.id)
-              .maybeSingle();
+            // Fetch profile and tenant with retry for trigger completion
+            let profile = null;
+            for (let i = 0; i < 4; i++) {
+              const { data: p } = await supabase
+                .from('user_profiles')
+                .select('*')
+                .eq('id', data.user.id)
+                .maybeSingle();
+              if (p) {
+                profile = p;
+                break;
+              }
+              await new Promise((r) => setTimeout(r, 400));
+            }
 
             if (profile) {
               const { data: tenantData } = await supabase
@@ -217,14 +248,19 @@ export const useAuthStore = create<AuthState>()(
           }
         }
 
-        // Mock Fallback
-        await new Promise((r) => setTimeout(r, 700));
-        set({
-          isLoading: false,
-          user: { ...DEFAULT_MOCK_USER, email },
-          tenant: { ...DEFAULT_MOCK_TENANT, name: companyName },
-          isAuthenticated: true,
-        });
+        // Mock Fallback ONLY if Supabase is NOT configured
+        if (!isSupabaseConfigured) {
+          await new Promise((r) => setTimeout(r, 700));
+          set({
+            isLoading: false,
+            user: { ...DEFAULT_MOCK_USER, email },
+            tenant: { ...DEFAULT_MOCK_TENANT, name: companyName },
+            isAuthenticated: true,
+          });
+        } else {
+          set({ isLoading: false });
+          throw new Error('Account created! If email confirmation is enabled, please check your email inbox to verify your account.');
+        }
       },
 
       logout: async () => {

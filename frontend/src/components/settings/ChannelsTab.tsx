@@ -144,7 +144,40 @@ function WhatsAppPanel() {
         }),
       }).catch(() => null);
 
-      // 2. Fetch connection QR
+      // 2. Register Webhook in Evolution API
+      const supabaseEndpoint = import.meta.env.VITE_SUPABASE_URL || 'https://bmiwzknbsuqxxoeaatnt.supabase.co';
+      await fetch(`${evolutionUrl}/webhook/set/${instanceName}`, {
+        method: 'POST',
+        headers: {
+          apikey: apiKey,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          webhook: {
+            enabled: true,
+            url: `${supabaseEndpoint}/functions/v1/whatsapp-webhook`,
+            webhookByEvents: false,
+            events: ['MESSAGES_UPSERT'],
+          },
+        }),
+      }).catch(() => null);
+
+      // 3. Save connection record in Supabase
+      if (isSupabaseConfigured && tenant?.id) {
+        try {
+          await supabase.from('channel_connections').upsert({
+            tenant_id: tenant.id,
+            channel: 'whatsapp',
+            status: 'connected',
+            config: { instance_name: instanceName, api_url: evolutionUrl },
+            connected_at: new Date().toISOString(),
+          }, { onConflict: 'tenant_id, channel' });
+        } catch (e) {
+          console.warn('Channel upsert err:', e);
+        }
+      }
+
+      // 4. Fetch connection QR
       const res = await fetch(`${evolutionUrl}/instance/connect/${instanceName}`, {
         method: 'GET',
         headers: { apikey: apiKey },
