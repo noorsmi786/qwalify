@@ -293,19 +293,27 @@ app.post('/webhook/whatsapp', async (req, res) => {
       });
 
       // 6. Send Reply to WhatsApp via Evolution API
-      console.log(`[WhatsApp Outbound] Replying to ${senderPhone}: "${replyText}"`);
-      await fetch(`${EVOLUTION_URL}/message/sendText/${instanceName}`, {
-        method: 'POST',
-        headers: {
-          apikey: EVOLUTION_API_KEY,
-          'Content-Type': 'application/json',
-          'User-Agent': 'Mozilla/5.0',
-        },
-        body: JSON.stringify({
-          number: senderPhone,
-          text: replyText,
-        }),
-      });
+      const sendApiKey = body.apikey || data?.apikey || conn?.config?.api_key || '75862081-0E3F-4326-850D-587B3D799D89';
+      console.log(`[WhatsApp Outbound] Replying to ${senderPhone} using instance key (${sendApiKey.slice(0, 8)}...): "${replyText}"`);
+
+      try {
+        const evoRes = await fetch(`${EVOLUTION_URL}/message/sendText/${instanceName}`, {
+          method: 'POST',
+          headers: {
+            apikey: sendApiKey,
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0',
+          },
+          body: JSON.stringify({
+            number: senderPhone,
+            text: replyText,
+          }),
+        });
+        const evoText = await evoRes.text();
+        console.log(`[WhatsApp Outbound Result] Status: ${evoRes.status}, Body: ${evoText}`);
+      } catch (err) {
+        console.error('[WhatsApp Outbound Error]:', err);
+      }
 
       return res.json({ status: 'success', replied: true, score });
     }
