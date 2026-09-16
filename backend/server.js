@@ -248,6 +248,14 @@ app.post('/webhook/whatsapp', async (req, res) => {
 
       const activeAI = (aiConfigs || []).find((c) => c.is_active) || (aiConfigs || [])[0];
 
+      // Fetch last 10 messages for conversational context
+      const { data: pastMessages } = await supabase
+        .from('messages')
+        .select('sender, content')
+        .eq('conversation_id', conv.id)
+        .order('created_at', { ascending: true })
+        .limit(10);
+
       // 5. Execute AI Turn
       const { replyText, score } = await generateAIResponse({
         provider: activeAI?.provider || 'gemini',
@@ -258,7 +266,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
           leadName: pushName,
           currentScore: lead?.score || 15,
         },
-        conversationHistory: [],
+        conversationHistory: pastMessages || [],
         latestMessage: messageText,
       });
 
