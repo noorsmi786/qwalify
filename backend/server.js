@@ -151,10 +151,16 @@ STRICT RULES:
   }
 
   // Clean reply: strip JSON metadata + any markdown leftovers
-  const replyText = rawReply
+  let replyText = rawReply
     .replace(jsonRegex, '')
     .replace(/[*_~`#>]+/g, '')
     .trim();
+
+  // Hard-cap to 2 sentences to keep WhatsApp replies punchy
+  const sentences = replyText.match(/[^.!?]+[.!?](?:\s|$)|[^.!?]+$/g) || [];
+  if (sentences.length > 2) {
+    replyText = sentences.slice(0, 2).join(' ').trim();
+  }
 
   return { replyText, score, isHandoffReady, bookingTriggered };
 }
