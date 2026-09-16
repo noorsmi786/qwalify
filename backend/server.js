@@ -32,52 +32,78 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'qwalify-webhook-engine', timestamp: new Date().toISOString() });
 });
 
-// Helper: Call AI provider (Gemini, OpenAI, Groq, OpenRouter)
-async function generateAIResponse({ provider, apiKey, model, context, conversationHistory, latestMessage }) {
-  const systemPrompt = `You are an AI Sales Development Representative (SDR) for ${context.companyName || 'our company'}.
-Your goal is to politely qualify incoming leads and assist them with information.
-Rules:
-1. Be friendly, concise, and helpful (max 2-3 sentences).
-2. Ask 1 qualification question at a time (e.g. team size, timeline, budget, specific needs).
-3. At the end of your response, output a score assessment in brackets: [SCORE: <0-100>]. Example: [SCORE: 75]
-Current lead name: ${context.leadName || 'Prospect'}
-Current score: ${context.currentScore || 10}`;
+
+// ─── AI Response Generator ─────────────────────────────────────────────────────
+async function generateAIResponse({ provider, apiKey, model, context, conversationHistory, latestMessage, bookingSettings }) {
+  const hotThreshold = bookingSettings?.hot_score_threshold || 75;
+  const bookingUrl = bookingSettings?.booking_url || null;
+
+  // Concise WhatsApp-native SDR prompt (fixes issue #1: long robotic replies)
+  const systemPrompt = `You are Qwalify AI, an elite Sales Development Representative (SDR) for "${context.companyName}".
+You are chatting with a prospect on WhatsApp — keep replies SHORT (1-2 sentences max), natural, and conversational like a real human texting.
+
+LEAD: ${context.leadName} | Current score: ${context.currentScore}/100 | Hot threshold: ${hotThreshold}
+
+YOUR GOALS (discover in natural order — one question per reply, never multiple):
+1. What business problem are they solving?
+2. Team/company size?
+3. Timeline and rough budget?
+
+BOOKING RULES:
+- Only propose a booking link after you've confirmed budget AND timeline AND score is approaching ${hotThreshold}.
+- If the prospect explicitly asks to book/schedule, OR if score is ≥ ${hotThreshold}, send the booking link: ${bookingUrl || '(no booking link configured yet)'}
+- Booking message format: "Great, let's get that scheduled! Here's my booking link: <link> — pick any slot that works for you 📅"
+
+STRICT RULES:
+- Max 2 sentences per reply. Be punchy and human.
+- Ask only ONE question at a time.
+- NEVER say "I'm an AI" or use corporate jargon.
+- NEVER output headers, bullet lists, or markdown — plain text only.
+- At the end of your ENTIRE response, include this hidden metadata (the prospect will NOT see it):
+<qualification_json>
+{"new_score": <0-100>, "score_reason": "<1 sentence>", "is_handoff_ready": <true/false>, "booking_triggered": <true if you just sent the booking link, false otherwise>}
+</qualification_json>`;
 
   const messages = [
     { role: 'system', content: systemPrompt },
-    ...conversationHistory.map((m) => ({
+    ...(conversationHistory || []).slice(-8).map((m) => ({
       role: m.sender === 'lead' ? 'user' : 'assistant',
       content: m.content,
     })),
     { role: 'user', content: latestMessage },
   ];
 
-  // Default fallback reply
-  let replyText = `Hi ${context.leadName || 'there'}! 👋 Thanks for reaching out to ${context.companyName}. How can we help your team today? [SCORE: 25]`;
-  let score = 25;
+  let rawReply = `Hey ${context.leadName}! 👋 Thanks for reaching out to ${context.companyName}. What brings you here today?
+<qualification_json>
+{"new_score": 20, "score_reason": "First contact, no information gathered yet.", "is_handoff_ready": false, "booking_triggered": false}
+</qualification_json>`;
 
   if (provider === 'gemini' && apiKey) {
     try {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model || 'gemini-1.5-flash'}:generateContent?key=${apiKey}`;
-      const geminiBody = {
-        contents: [
-          { role: 'user', parts: [{ text: systemPrompt + '\n\nLead: ' + latestMessage }] }
-        ]
-      };
+      const geminiMessages = messages.filter(m => m.role !== 'system');
       const r = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(geminiBody),
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: geminiMessages.map(m => ({
+            role: m.role === 'user' ? 'user' : 'model',
+            parts: [{ text: m.content }],
+          })),
+          generationConfig: { maxOutputTokens: 300, temperature: 0.4 },
+        }),
       });
       if (r.ok) {
         const d = await r.json();
-        replyText = d.candidates?.[0]?.content?.parts?.[0]?.text || replyText;
+        rawReply = d.candidates?.[0]?.content?.parts?.[0]?.text || rawReply;
+      } else {
+        console.error('Gemini error:', await r.text());
       }
     } catch (e) {
       console.error('Gemini call error:', e);
     }
   } else if (apiKey) {
-    // OpenAI-compatible format (OpenAI, Groq, OpenRouter, Mistral, Grok)
     let baseUrl = 'https://api.openai.com/v1/chat/completions';
     if (provider === 'groq') baseUrl = 'https://api.groq.com/openai/v1/chat/completions';
     if (provider === 'openrouter') baseUrl = 'https://openrouter.ai/api/v1/chat/completions';
@@ -87,34 +113,52 @@ Current score: ${context.currentScore || 10}`;
     try {
       const r = await fetch(baseUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${apiKey}`,
-        },
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
         body: JSON.stringify({
           model: model || (provider === 'groq' ? 'llama-3.3-70b-versatile' : 'gpt-4o-mini'),
           messages,
-          temperature: 0.3,
+          temperature: 0.4,
+          max_tokens: 300,
         }),
       });
       if (r.ok) {
         const d = await r.json();
-        replyText = d.choices?.[0]?.message?.content || replyText;
+        rawReply = d.choices?.[0]?.message?.content || rawReply;
+      } else {
+        console.error(`${provider} error:`, await r.text());
       }
     } catch (e) {
       console.error(`${provider} call error:`, e);
     }
   }
 
-  // Extract score
-  const scoreMatch = replyText.match(/\[SCORE:\s*(\d+)\]/i);
-  if (scoreMatch) {
-    score = Math.min(100, Math.max(0, parseInt(scoreMatch[1], 10)));
-    replyText = replyText.replace(/\[SCORE:\s*\d+\]/i, '').trim();
+  // Parse qualification metadata
+  const jsonRegex = /<qualification_json>([\s\S]*?)<\/qualification_json>/i;
+  const match = rawReply.match(jsonRegex);
+  let score = context.currentScore || 20;
+  let isHandoffReady = false;
+  let bookingTriggered = false;
+
+  if (match?.[1]) {
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      if (typeof parsed.new_score === 'number') score = Math.min(100, Math.max(0, Math.round(parsed.new_score)));
+      if (typeof parsed.is_handoff_ready === 'boolean') isHandoffReady = parsed.is_handoff_ready;
+      if (typeof parsed.booking_triggered === 'boolean') bookingTriggered = parsed.booking_triggered;
+    } catch (e) {
+      console.warn('Failed to parse qualification JSON:', e);
+    }
   }
 
-  return { replyText, score };
+  // Clean reply: strip JSON metadata + any markdown leftovers
+  const replyText = rawReply
+    .replace(jsonRegex, '')
+    .replace(/[*_~`#>]+/g, '')
+    .trim();
+
+  return { replyText, score, isHandoffReady, bookingTriggered };
 }
+
 
 // ─── WhatsApp Webhook Handler ──────────────────────────────────────────────────
 app.post('/webhook/whatsapp', async (req, res) => {
@@ -241,11 +285,11 @@ app.post('/webhook/whatsapp', async (req, res) => {
         channel: 'whatsapp',
       });
 
-      // 4. Load Active AI Provider Config
-      const { data: aiConfigs } = await supabase
-        .from('ai_provider_configs')
-        .select('*')
-        .eq('tenant_id', tenantId);
+      // 4. Load Active AI Provider Config + Booking Settings (parallel)
+      const [{ data: aiConfigs }, { data: bookingSettings }] = await Promise.all([
+        supabase.from('ai_provider_configs').select('*').eq('tenant_id', tenantId),
+        supabase.from('booking_settings').select('*').eq('tenant_id', tenantId).maybeSingle(),
+      ]);
 
       const activeAI = (aiConfigs || []).find((c) => c.is_active) || (aiConfigs || [])[0];
 
@@ -258,7 +302,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
         .limit(10);
 
       // 5. Execute AI Turn
-      const { replyText, score } = await generateAIResponse({
+      const { replyText, score, isHandoffReady, bookingTriggered } = await generateAIResponse({
         provider: activeAI?.provider || 'gemini',
         apiKey: activeAI?.api_key || '',
         model: activeAI?.model || 'gemini-1.5-flash',
@@ -269,6 +313,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
         },
         conversationHistory: pastMessages || [],
         latestMessage: messageText,
+        bookingSettings: bookingSettings || null,
       });
 
       // Update lead score & status
@@ -278,6 +323,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
         .update({
           score,
           status: newStatus,
+          is_handoff_ready: isHandoffReady || false,
           last_contact_at: new Date().toISOString(),
         })
         .eq('id', lead.id);
@@ -292,9 +338,31 @@ app.post('/webhook/whatsapp', async (req, res) => {
         channel: 'whatsapp',
       });
 
+      // 5b. If booking was triggered, write a booking record in Supabase (fixes issue #3)
+      if (bookingTriggered && bookingSettings?.booking_url) {
+        const scheduledAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(); // 2 days from now as placeholder
+        const { error: bookingErr } = await supabase.from('bookings').insert({
+          tenant_id: tenantId,
+          lead_id: lead.id,
+          scheduled_at: scheduledAt,
+          duration_mins: bookingSettings.meeting_duration_mins || 30,
+          meeting_url: bookingSettings.booking_url,
+          status: 'confirmed',
+          source_channel: 'whatsapp',
+          notes: `Booking link sent via WhatsApp AI. Lead self-scheduled via: ${bookingSettings.booking_url}`,
+        });
+        if (bookingErr) {
+          console.error('[Booking Write Error]:', bookingErr);
+        } else {
+          console.log(`[Booking Created] Lead ${lead.id} booked via WhatsApp.`);
+        }
+        // Also update lead to is_handoff_ready
+        await supabase.from('leads').update({ is_handoff_ready: true }).eq('id', lead.id);
+      }
+
       // 6. Send Reply to WhatsApp via Evolution API
-      const sendApiKey = body.apikey || data?.apikey || conn?.config?.api_key || '75862081-0E3F-4326-850D-587B3D799D89';
-      console.log(`[WhatsApp Outbound] Replying to ${senderPhone} using instance key (${sendApiKey.slice(0, 8)}...): "${replyText}"`);
+      const sendApiKey = body.apikey || data?.apikey || '75862081-0E3F-4326-850D-587B3D799D89';
+      console.log(`[WhatsApp Outbound] To ${senderPhone} (score=${score}, status=${newStatus}): "${replyText}"`);
 
       try {
         const evoRes = await fetch(`${EVOLUTION_URL}/message/sendText/${instanceName}`, {
@@ -310,12 +378,13 @@ app.post('/webhook/whatsapp', async (req, res) => {
           }),
         });
         const evoText = await evoRes.text();
-        console.log(`[WhatsApp Outbound Result] Status: ${evoRes.status}, Body: ${evoText}`);
+        console.log(`[WhatsApp Outbound Result] Status: ${evoRes.status}`);
+        if (evoRes.status !== 201) console.warn('[Outbound Body]:', evoText);
       } catch (err) {
         console.error('[WhatsApp Outbound Error]:', err);
       }
 
-      return res.json({ status: 'success', replied: true, score });
+      return res.json({ status: 'success', replied: true, score, bookingTriggered });
     }
 
     res.json({ status: 'ignored_event' });
