@@ -1,6 +1,6 @@
-﻿import { Outlet, Navigate } from 'react-router-dom';
+import { Outlet, Navigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Sidebar, Navbar } from './AppShell';
+import { Sidebar, Navbar, MobileBottomNav } from './AppShell';
 import { useAuthStore } from '@/store/authStore';
 import { FeedbackWidget } from '@/components/ui/FeedbackWidget';
 
@@ -16,7 +16,7 @@ export function AuthenticatedLayout() {
       <Sidebar />
       <div className="flex flex-col flex-1 min-w-0 overflow-hidden">
         <Navbar />
-        <main className="flex-1 overflow-y-auto">
+        <main className="flex-1 overflow-y-auto pb-16 md:pb-0">
           <motion.div
             key={location.pathname}
             initial={{ opacity: 0, y: 8 }}
@@ -28,6 +28,7 @@ export function AuthenticatedLayout() {
           </motion.div>
         </main>
       </div>
+      <MobileBottomNav />
       <FeedbackWidget />
     </div>
   );
