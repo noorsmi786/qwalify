@@ -1,6 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthLayout, AuthenticatedLayout } from '@/components/layout/Layouts';
 import { LoginPage, SignupPage, ForgotPasswordPage } from '@/pages/auth/AuthPages';
+import LandingPage from '@/pages/LandingPage';
 import DashboardPage from '@/pages/Dashboard';
 import LeadsPage from '@/pages/Leads';
 import LeadDetailPage from '@/pages/LeadDetail';
@@ -13,6 +14,9 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
+        {/* Public Landing Page */}
+        <Route path="/" element={<LandingPage />} />
+
         {/* Auth routes */}
         <Route element={<AuthLayout />}>
           <Route path="/login" element={<LoginPage />} />
@@ -35,8 +39,9 @@ export default function App() {
         </Route>
 
         {/* Catch all */}
-        <Route path="*" element={<Navigate to="/login" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </BrowserRouter>
   );
 }
+
