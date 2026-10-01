@@ -1,7 +1,8 @@
-import { Outlet, Navigate } from 'react-router-dom';
+﻿import { Outlet, Navigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
 import { Sidebar, Navbar } from './AppShell';
 import { useAuthStore } from '@/store/authStore';
+import { FeedbackWidget } from '@/components/ui/FeedbackWidget';
 
 export function AuthenticatedLayout() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -27,6 +28,7 @@ export function AuthenticatedLayout() {
           </motion.div>
         </main>
       </div>
+      <FeedbackWidget />
     </div>
   );
 }

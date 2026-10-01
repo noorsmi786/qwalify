@@ -1,9 +1,26 @@
 import express from 'express';
 import cors from 'cors';
 import { createClient } from '@supabase/supabase-js';
+import nodemailer from 'nodemailer';
 import dotenv from 'dotenv';
 
 dotenv.config();
+
+// ─── Email transporter for feedback ───────────────────────────────────────────
+const FEEDBACK_EMAIL_TO = process.env.FEEDBACK_EMAIL_TO || 'PLACEHOLDER_EMAIL';
+const GMAIL_USER = process.env.GMAIL_USER || '';
+const GMAIL_APP_PASSWORD = process.env.GMAIL_APP_PASSWORD || '';
+
+let emailTransporter = null;
+if (GMAIL_USER && GMAIL_APP_PASSWORD) {
+  emailTransporter = nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: GMAIL_USER, pass: GMAIL_APP_PASSWORD },
+  });
+  console.log(`📧 Email feedback configured → ${FEEDBACK_EMAIL_TO}`);
+} else {
+  console.warn('⚠️  No Gmail credentials set — feedback will be logged to console only');
+}
 
 const app = express();
 app.use(cors());
@@ -33,7 +50,50 @@ app.get('/api/health', (req, res) => {
 });
 
 
-// ─── AI Response Generator ─────────────────────────────────────────────────────
+// ─── Feedback Endpoint ─────────────────────────────────────────────────────────
+app.post('/api/feedback', async (req, res) => {
+  try {
+    const { type, message, userEmail, userName, workspace, submittedAt } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: 'Message is required' });
+
+    const typeEmoji = { bug: '🐛', suggestion: '💡', compliment: '🌟', other: '💬' }[type] || '💬';
+    const subject = `${typeEmoji} Qwalify Feedback [${(type || 'other').toUpperCase()}] from ${userName || userEmail}`;
+    const html = `
+      <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto;">
+        <h2 style="color: #7c3aed;">New Qwalify Feedback ${typeEmoji}</h2>
+        <table style="border-collapse: collapse; width: 100%;">
+          <tr><td style="padding: 8px; font-weight: bold; color: #666;">Type</td><td style="padding: 8px;">${type}</td></tr>
+          <tr style="background: #f9f9f9;"><td style="padding: 8px; font-weight: bold; color: #666;">From</td><td style="padding: 8px;">${userName || 'Anonymous'} (${userEmail})</td></tr>
+          <tr><td style="padding: 8px; font-weight: bold; color: #666;">Workspace</td><td style="padding: 8px;">${workspace || 'N/A'}</td></tr>
+          <tr style="background: #f9f9f9;"><td style="padding: 8px; font-weight: bold; color: #666;">Submitted</td><td style="padding: 8px;">${new Date(submittedAt).toLocaleString()}</td></tr>
+        </table>
+        <div style="margin-top: 20px; padding: 16px; background: #f5f5f5; border-left: 4px solid #7c3aed; border-radius: 4px;">
+          <p style="margin: 0; white-space: pre-wrap; color: #333;">${message}</p>
+        </div>
+      </div>
+    `;
+
+    console.log(`[Feedback] ${type} from ${userEmail}: "${message.slice(0, 80)}"`);
+
+    if (emailTransporter) {
+      await emailTransporter.sendMail({
+        from: `"Qwalify Feedback" <${GMAIL_USER}>`,
+        to: FEEDBACK_EMAIL_TO,
+        subject,
+        html,
+      });
+      console.log(`[Feedback] Email sent to ${FEEDBACK_EMAIL_TO}`);
+    }
+
+    res.json({ status: 'received' });
+  } catch (err) {
+    console.error('[Feedback Error]:', err);
+    res.status(500).json({ error: 'Failed to process feedback' });
+  }
+});
+
+
+
 async function generateAIResponse({ provider, apiKey, model, context, conversationHistory, latestMessage, bookingSettings }) {
   const hotThreshold = bookingSettings?.hot_score_threshold || 75;
   const bookingUrl = bookingSettings?.booking_url || null;

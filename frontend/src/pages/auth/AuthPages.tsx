@@ -1,9 +1,9 @@
-import { useState } from 'react';
+﻿import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { Zap, Eye, EyeOff, ArrowRight } from 'lucide-react';
+import { Zap, Eye, EyeOff, ArrowRight, AlertCircle } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
@@ -19,6 +19,7 @@ export function LoginPage() {
   const navigate = useNavigate();
   const login = useAuthStore((s) => s.login);
   const [showPass, setShowPass] = useState(false);
+  const [authError, setAuthError] = useState<string | null>(null);
 
   const {
     register,
@@ -27,8 +28,13 @@ export function LoginPage() {
   } = useForm<LoginForm>({ resolver: zodResolver(loginSchema) });
 
   const onSubmit = async (data: LoginForm) => {
-    await login(data.email, data.password);
-    navigate('/dashboard');
+    setAuthError(null);
+    try {
+      await login(data.email, data.password);
+      navigate('/dashboard');
+    } catch (err: any) {
+      setAuthError(err?.message || 'Sign in failed. Please try again.');
+    }
   };
 
   return (
@@ -77,6 +83,14 @@ export function LoginPage() {
             Forgot password?
           </Link>
         </div>
+
+        {authError && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+            <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+            <p className="text-sm text-red-400">{authError}</p>
+          </div>
+        )}
+
         <Button type="submit" className="w-full mt-2" loading={isSubmitting}>
           Sign in <ArrowRight className="w-4 h-4" />
         </Button>
@@ -88,18 +102,12 @@ export function LoginPage() {
           Start for free
         </Link>
       </p>
-
-      {/* Demo hint */}
-      <div className="mt-6 p-3 rounded-lg bg-teal-500/5 border border-teal-500/20">
-        <p className="text-xs text-teal-400 text-center">
-          💡 Demo: any email + password works
-        </p>
-      </div>
     </div>
   );
 }
 
 const signupSchema = z.object({
+  fullName: z.string().min(2, 'Name must be at least 2 characters'),
   companyName: z.string().min(2, 'Company name is required'),
   email: z.string().email('Invalid email address'),
   password: z.string().min(8, 'At least 8 characters'),
@@ -110,6 +118,8 @@ type SignupForm = z.infer<typeof signupSchema>;
 export function SignupPage() {
   const navigate = useNavigate();
   const signup = useAuthStore((s) => s.signup);
+  const [authError, setAuthError] = useState<string | null>(null);
+  const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const {
     register,
@@ -118,8 +128,20 @@ export function SignupPage() {
   } = useForm<SignupForm>({ resolver: zodResolver(signupSchema) });
 
   const onSubmit = async (data: SignupForm) => {
-    await signup(data.email, data.password, data.companyName);
-    navigate('/dashboard');
+    setAuthError(null);
+    setSuccessMsg(null);
+    try {
+      await signup(data.email, data.password, data.companyName, data.fullName);
+      navigate('/dashboard');
+    } catch (err: any) {
+      const msg = err?.message || 'Account creation failed. Please try again.';
+      // If the message indicates success but needs sign-in, show as info not error
+      if (msg.includes('created') || msg.includes('sign in')) {
+        setSuccessMsg(msg);
+      } else {
+        setAuthError(msg);
+      }
+    }
   };
 
   return (
@@ -137,6 +159,12 @@ export function SignupPage() {
       </div>
 
       <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
+        <Input
+          label="Your name"
+          placeholder="John Smith"
+          error={errors.fullName?.message}
+          {...register('fullName')}
+        />
         <Input
           label="Company name"
           placeholder="Acme Corp"
@@ -157,6 +185,20 @@ export function SignupPage() {
           error={errors.password?.message}
           {...register('password')}
         />
+
+        {authError && (
+          <div className="flex items-start gap-2 p-3 rounded-lg bg-red-500/10 border border-red-500/20">
+            <AlertCircle className="w-4 h-4 text-red-400 mt-0.5 flex-shrink-0" />
+            <p className="text-sm text-red-400">{authError}</p>
+          </div>
+        )}
+
+        {successMsg && (
+          <div className="p-3 rounded-lg bg-teal-500/10 border border-teal-500/20">
+            <p className="text-sm text-teal-400">{successMsg}</p>
+          </div>
+        )}
+
         <Button type="submit" className="w-full mt-2" loading={isSubmitting}>
           Create workspace <ArrowRight className="w-4 h-4" />
         </Button>

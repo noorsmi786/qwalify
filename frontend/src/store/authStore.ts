@@ -1,4 +1,4 @@
-import { create } from 'zustand';
+﻿import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { User, Tenant } from '@/types';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
@@ -19,6 +19,15 @@ const DEFAULT_MOCK_USER: User = {
   role: 'owner',
 };
 
+function mapAuthError(message: string): string {
+  if (message.includes('Invalid login credentials')) return 'Incorrect email or password. Please try again.';
+  if (message.includes('Email not confirmed')) return 'Please sign in again — your account is being set up.';
+  if (message.includes('User already registered')) return 'An account with this email already exists. Please sign in instead.';
+  if (message.includes('Password should be at least')) return 'Password must be at least 8 characters long.';
+  if (message.includes('Unable to validate email address')) return 'Please enter a valid email address.';
+  return message;
+}
+
 interface AuthState {
   user: User | null;
   tenant: Tenant | null;
@@ -27,10 +36,12 @@ interface AuthState {
   isBackendConnected: boolean;
   initAuth: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string, companyName: string) => Promise<void>;
+  signup: (email: string, password: string, companyName: string, fullName?: string) => Promise<void>;
   logout: () => Promise<void>;
   updateTenantInfo: (updates: Partial<Tenant>) => Promise<void>;
 }
+
+type SetUserFromProfile = (profile: any, tenantData: any) => void;
 
 export const useAuthStore = create<AuthState>()(
   persist(
@@ -42,28 +53,21 @@ export const useAuthStore = create<AuthState>()(
       isBackendConnected: isSupabaseConfigured,
 
       initAuth: async () => {
-        if (!isSupabaseConfigured) {
-          // If already logged in locally in demo mode, keep session
-          return;
-        }
-
+        if (!isSupabaseConfigured) return;
         try {
           const { data: { session } } = await supabase.auth.getSession();
           if (session?.user) {
-            // Fetch profile and tenant
             const { data: profile } = await supabase
               .from('user_profiles')
               .select('*')
               .eq('id', session.user.id)
               .maybeSingle();
-
             if (profile) {
               const { data: tenantData } = await supabase
                 .from('tenants')
                 .select('*')
                 .eq('id', profile.tenant_id)
                 .maybeSingle();
-
               set({
                 isAuthenticated: true,
                 user: {
@@ -74,16 +78,14 @@ export const useAuthStore = create<AuthState>()(
                   role: profile.role,
                   avatar_url: profile.avatar_url || undefined,
                 },
-                tenant: tenantData
-                  ? {
-                      id: tenantData.id,
-                      name: tenantData.name,
-                      slug: tenantData.slug,
-                      logo_url: tenantData.logo_url || undefined,
-                      timezone: tenantData.timezone,
-                      created_at: tenantData.created_at,
-                    }
-                  : null,
+                tenant: tenantData ? {
+                  id: tenantData.id,
+                  name: tenantData.name,
+                  slug: tenantData.slug,
+                  logo_url: tenantData.logo_url || undefined,
+                  timezone: tenantData.timezone,
+                  created_at: tenantData.created_at,
+                } : null,
               });
             }
           }
@@ -96,30 +98,23 @@ export const useAuthStore = create<AuthState>()(
         set({ isLoading: true });
 
         if (isSupabaseConfigured) {
-          const { data, error } = await supabase.auth.signInWithPassword({
-            email,
-            password,
-          });
+          const { data, error } = await supabase.auth.signInWithPassword({ email, password });
 
           if (error) {
             set({ isLoading: false });
-            throw error;
+            throw new Error(mapAuthError(error.message));
           }
 
           if (data.user) {
-            // Fetch profile and tenant with retry for trigger completion
             let profile = null;
-            for (let i = 0; i < 4; i++) {
+            for (let i = 0; i < 5; i++) {
               const { data: p } = await supabase
                 .from('user_profiles')
                 .select('*')
                 .eq('id', data.user.id)
                 .maybeSingle();
-              if (p) {
-                profile = p;
-                break;
-              }
-              await new Promise((r) => setTimeout(r, 400));
+              if (p) { profile = p; break; }
+              await new Promise((r) => setTimeout(r, 500));
             }
 
             if (profile) {
@@ -128,7 +123,6 @@ export const useAuthStore = create<AuthState>()(
                 .select('*')
                 .eq('id', profile.tenant_id)
                 .maybeSingle();
-
               set({
                 isLoading: false,
                 isAuthenticated: true,
@@ -139,37 +133,33 @@ export const useAuthStore = create<AuthState>()(
                   full_name: profile.full_name,
                   role: profile.role,
                 },
-                tenant: tenantData
-                  ? {
-                      id: tenantData.id,
-                      name: tenantData.name,
-                      slug: tenantData.slug,
-                      timezone: tenantData.timezone,
-                      created_at: tenantData.created_at,
-                    }
-                  : null,
+                tenant: tenantData ? {
+                  id: tenantData.id,
+                  name: tenantData.name,
+                  slug: tenantData.slug,
+                  timezone: tenantData.timezone,
+                  created_at: tenantData.created_at,
+                } : null,
               });
               return;
             }
           }
+
+          set({ isLoading: false });
+          throw new Error('Could not load your profile. Please try signing in again.');
         }
 
-        // Mock Fallback ONLY if Supabase is NOT configured
-        if (!isSupabaseConfigured) {
-          await new Promise((r) => setTimeout(r, 600));
-          set({
-            isLoading: false,
-            user: { ...DEFAULT_MOCK_USER, email },
-            tenant: DEFAULT_MOCK_TENANT,
-            isAuthenticated: true,
-          });
-        } else {
-          set({ isLoading: false });
-          throw new Error('User profile not found in database. Please verify your email.');
-        }
+        // Mock fallback — only when Supabase is NOT configured
+        await new Promise((r) => setTimeout(r, 600));
+        set({
+          isLoading: false,
+          user: { ...DEFAULT_MOCK_USER, email },
+          tenant: DEFAULT_MOCK_TENANT,
+          isAuthenticated: true,
+        });
       },
 
-      signup: async (email: string, password: string, companyName: string) => {
+      signup: async (email: string, password: string, companyName: string, fullName?: string) => {
         set({ isLoading: true });
 
         if (isSupabaseConfigured) {
@@ -179,41 +169,40 @@ export const useAuthStore = create<AuthState>()(
             options: {
               data: {
                 company_name: companyName,
-                full_name: email.split('@')[0],
+                full_name: fullName || email.split('@')[0],
               },
             },
           });
 
           if (error) {
             set({ isLoading: false });
-            throw error;
+            throw new Error(mapAuthError(error.message));
           }
 
           if (data.user) {
-            // If no session returned (e.g. email confirmation required or timing), try signIn
+            // If email confirmation is disabled, we get a session immediately
+            // If confirmation is enabled, session will be null — try signing in
             if (!data.session) {
-              const { data: signData } = await supabase.auth.signInWithPassword({
-                email,
-                password,
-              }).catch(() => ({ data: null }));
-              if (signData?.session) {
-                data.session = signData.session;
+              const { data: signInData, error: signInError } = await supabase.auth.signInWithPassword({ email, password });
+              if (signInData?.session) {
+                // Successfully signed in after signup
+              } else if (signInError) {
+                // Email confirmation might be required
+                set({ isLoading: false });
+                throw new Error('Account created! You can now sign in with your email and password.');
               }
             }
 
-            // Fetch profile and tenant with retry for trigger completion
+            // Fetch profile with retries (DB trigger may take a moment)
             let profile = null;
-            for (let i = 0; i < 4; i++) {
+            for (let i = 0; i < 6; i++) {
               const { data: p } = await supabase
                 .from('user_profiles')
                 .select('*')
                 .eq('id', data.user.id)
                 .maybeSingle();
-              if (p) {
-                profile = p;
-                break;
-              }
-              await new Promise((r) => setTimeout(r, 400));
+              if (p) { profile = p; break; }
+              await new Promise((r) => setTimeout(r, 600));
             }
 
             if (profile) {
@@ -222,7 +211,6 @@ export const useAuthStore = create<AuthState>()(
                 .select('*')
                 .eq('id', profile.tenant_id)
                 .maybeSingle();
-
               set({
                 isLoading: false,
                 isAuthenticated: true,
@@ -233,33 +221,35 @@ export const useAuthStore = create<AuthState>()(
                   full_name: profile.full_name,
                   role: profile.role,
                 },
-                tenant: tenantData
-                  ? {
-                      id: tenantData.id,
-                      name: tenantData.name,
-                      slug: tenantData.slug,
-                      timezone: tenantData.timezone,
-                      created_at: tenantData.created_at,
-                    }
-                  : null,
+                tenant: tenantData ? {
+                  id: tenantData.id,
+                  name: tenantData.name,
+                  slug: tenantData.slug,
+                  timezone: tenantData.timezone,
+                  created_at: tenantData.created_at,
+                } : null,
               });
               return;
             }
+
+            // Profile not ready yet (edge case) — ask user to sign in
+            set({ isLoading: false });
+            throw new Error('Account created! Please sign in with your email and password.');
           }
         }
 
-        // Mock Fallback ONLY if Supabase is NOT configured
+        // Mock fallback
         if (!isSupabaseConfigured) {
           await new Promise((r) => setTimeout(r, 700));
           set({
             isLoading: false,
-            user: { ...DEFAULT_MOCK_USER, email },
+            user: { ...DEFAULT_MOCK_USER, email, full_name: fullName || email.split('@')[0] },
             tenant: { ...DEFAULT_MOCK_TENANT, name: companyName },
             isAuthenticated: true,
           });
         } else {
           set({ isLoading: false });
-          throw new Error('Account created! If email confirmation is enabled, please check your email inbox to verify your account.');
+          throw new Error('Unable to create account. Please try again.');
         }
       },
 
@@ -273,7 +263,6 @@ export const useAuthStore = create<AuthState>()(
       updateTenantInfo: async (updates: Partial<Tenant>) => {
         const { tenant } = get();
         if (!tenant) return;
-
         if (isSupabaseConfigured) {
           await supabase
             .from('tenants')
@@ -284,17 +273,9 @@ export const useAuthStore = create<AuthState>()(
             })
             .eq('id', tenant.id);
         }
-
-        set({
-          tenant: {
-            ...tenant,
-            ...updates,
-          },
-        });
+        set({ tenant: { ...tenant, ...updates } });
       },
     }),
-    {
-      name: 'qwalify-auth-session',
-    }
+    { name: 'qwalify-auth-session' }
   )
 );
