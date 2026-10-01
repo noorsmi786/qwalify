@@ -14,6 +14,7 @@ import {
   Bell,
   Menu,
   X,
+  Bot,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
@@ -21,6 +22,7 @@ import { cn } from '@/lib/utils';
 
 export const NAV_ITEMS = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/agents', label: 'AI Workers', icon: Bot },
   { path: '/leads', label: 'Leads', icon: Users },
   { path: '/bookings', label: 'Appointments', icon: Calendar },
   { path: '/settings', label: 'Settings', icon: Settings },
@@ -188,6 +190,8 @@ export function Navbar() {
 
   const pageTitle: Record<string, string> = {
     '/dashboard': 'Dashboard',
+    '/agents': 'AI Worker & Bot Studio',
+    '/studio': 'AI Worker & Bot Studio',
     '/leads': 'Leads',
     '/bookings': 'Appointments',
     '/settings': 'Settings',
@@ -342,8 +346,9 @@ export function MobileBottomNav() {
   const location = useLocation();
   const items = [
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
+    { path: '/agents', label: 'Workers', icon: Bot },
     { path: '/leads', label: 'Leads', icon: Users },
-    { path: '/bookings', label: 'Appointments', icon: Calendar },
+    { path: '/bookings', label: 'Bookings', icon: Calendar },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];
 

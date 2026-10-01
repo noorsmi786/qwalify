@@ -94,34 +94,71 @@ app.post('/api/feedback', async (req, res) => {
 
 
 
-async function generateAIResponse({ provider, apiKey, model, context, conversationHistory, latestMessage, bookingSettings }) {
-  const hotThreshold = bookingSettings?.hot_score_threshold || 75;
-  const bookingUrl = bookingSettings?.booking_url || null;
+async function generateAIResponse({ provider, apiKey, model, context, conversationHistory, latestMessage, bookingSettings, agent }) {
+  const hotThreshold = agent?.hot_threshold || bookingSettings?.hot_score_threshold || 75;
+  const bookingUrl = agent?.booking_url || bookingSettings?.booking_url || null;
 
-  // Concise WhatsApp-native SDR prompt (fixes issue #1: long robotic replies)
-  const systemPrompt = `You are Qwalify AI, an elite Sales Development Representative (SDR) for "${context.companyName}".
-You are chatting with a prospect on WhatsApp — keep replies SHORT (1-2 sentences max), natural, and conversational like a real human texting.
+  // Build Tone & Persona Instructions
+  const toneDesc = {
+    empathetic: 'Warm, caring, reassuring, and patient (ideal for clinics, salons, healthcare).',
+    professional: 'Authoritative, polite, clear, and business-focused (ideal for B2B, real estate).',
+    friendly: 'Enthusiastic, approachable, and helpful (ideal for schools, retail).',
+    casual: 'Modern, vibrant, upbeat, and conversational (ideal for salons, spas).',
+    direct: 'Fast, concise, and straight to the point (ideal for auto, urgent inquiries).',
+  }[agent?.tone || 'friendly'] || 'Polite and helpful.';
 
-LEAD: ${context.leadName} | Current score: ${context.currentScore}/100 | Hot threshold: ${hotThreshold}
+  const emojiDesc = {
+    none: 'Do NOT use emojis under any circumstances.',
+    subtle: 'Use at most 1-2 subtle emojis per conversation.',
+    expressive: 'Use friendly, expressive emojis naturally.',
+  }[agent?.emoji_style || 'subtle'] || 'Use subtle emojis.';
 
-YOUR GOALS (discover in natural order — one question per reply, never multiple):
-1. What business problem are they solving?
-2. Team/company size?
-3. Timeline and rough budget?
+  // Build Knowledge Base Section
+  let kbSection = '';
+  if (Array.isArray(agent?.knowledge_base) && agent.knowledge_base.length > 0) {
+    kbSection = `BUSINESS KNOWLEDGE & FAQS (use these to answer customer questions accurately):\n` +
+      agent.knowledge_base.map((k) => `• [${k.category || 'General'}] Q: ${k.question} -> A: ${k.answer}`).join('\n');
+  }
+
+  // Build Qualification Rules Section
+  let qrSection = `YOUR DISCOVERY GOALS (ask one question at a time in natural conversational order):\n`;
+  if (Array.isArray(agent?.qualification_rules) && agent.qualification_rules.length > 0) {
+    qrSection += agent.qualification_rules
+      .map((q, i) => `${i + 1}. ${q.text} (Weight: ${q.weight || 20} pts)`)
+      .join('\n');
+  } else {
+    qrSection += `1. What specific service or need do they have?\n2. What is their target timeline?\n3. What is their rough budget range?`;
+  }
+
+  let customPromptSection = '';
+  if (agent?.custom_system_prompt?.trim()) {
+    customPromptSection = `SPECIAL BUSINESS INSTRUCTIONS:\n${agent.custom_system_prompt.trim()}\n`;
+  }
+
+  const systemPrompt = `You are "${agent?.name || 'Qwalify AI'}", an elite qualification assistant for "${context.companyName}" (${agent?.industry || 'business'} industry).
+You are chatting with a prospect on WhatsApp.
+
+TONE & STYLE:
+- Tone: ${toneDesc}
+- Emojis: ${emojiDesc}
+- Length: STRICTLY 1-2 sentences max. Keep replies punchy, natural, and conversational like a real human texting on WhatsApp.
+- Ask only ONE question at a time. Never overwhelm the prospect.
+
+${kbSection ? kbSection + '\n\n' : ''}${qrSection}
+
+${customPromptSection}LEAD INFO: ${context.leadName} | Current score: ${context.currentScore}/100 | Hot threshold: ${hotThreshold}
 
 BOOKING RULES:
-- Only propose a booking link after you've confirmed budget AND timeline AND score is approaching ${hotThreshold}.
-- If the prospect explicitly asks to book/schedule, OR if score is ≥ ${hotThreshold}, send the booking link: ${bookingUrl || '(no booking link configured yet)'}
-- Booking message format: "Great, let's get that scheduled! Here's my booking link: <link> — pick any slot that works for you 📅"
+- Propose the booking link when the prospect has answered key qualification questions AND score reaches/approaches ${hotThreshold}.
+- If the prospect explicitly asks to schedule/book an appointment, OR if score is ≥ ${hotThreshold}, send the booking link: ${bookingUrl || '(no booking link configured)'}
+- Booking message format: "Great, let's get that scheduled! Here's the booking link: <link> — pick any slot that works for you 📅"
 
 STRICT RULES:
-- Max 2 sentences per reply. Be punchy and human.
-- Ask only ONE question at a time.
-- NEVER say "I'm an AI" or use corporate jargon.
 - NEVER output headers, bullet lists, or markdown — plain text only.
-- At the end of your ENTIRE response, include this hidden metadata (the prospect will NOT see it):
+- NEVER say "I am an AI".
+- At the very end of your ENTIRE response, append this hidden metadata JSON:
 <qualification_json>
-{"new_score": <0-100>, "score_reason": "<1 sentence>", "is_handoff_ready": <true/false>, "booking_triggered": <true if you just sent the booking link, false otherwise>}
+{"new_score": <0-100>, "score_reason": "<1 sentence>", "is_handoff_ready": <true/false>, "booking_triggered": <true if you included the booking link, false otherwise>}
 </qualification_json>`;
 
   const messages = [
@@ -133,7 +170,7 @@ STRICT RULES:
     { role: 'user', content: latestMessage },
   ];
 
-  let rawReply = `Hey ${context.leadName}! 👋 Thanks for reaching out to ${context.companyName}. What brings you here today?
+  let rawReply = `Hey ${context.leadName}! 👋 Thanks for reaching out to ${context.companyName}. How can we assist you today?
 <qualification_json>
 {"new_score": 20, "score_reason": "First contact, no information gathered yet.", "is_handoff_ready": false, "booking_triggered": false}
 </qualification_json>`;
@@ -351,12 +388,15 @@ app.post('/webhook/whatsapp', async (req, res) => {
         channel: 'whatsapp',
       });
 
-      // 4. Load Active AI Provider Config + Booking Settings (parallel)
-      const [{ data: aiConfigs }, { data: bookingSettings }] = await Promise.all([
+      // 4. Load Active AI Provider Config + Booking Settings + Active AI Worker
+      const [{ data: aiConfigs }, { data: bookingSettings }, { data: activeAgentRow }, { data: tenantData }] = await Promise.all([
         supabase.from('ai_provider_configs').select('*').eq('tenant_id', tenantId),
         supabase.from('booking_settings').select('*').eq('tenant_id', tenantId).maybeSingle(),
+        supabase.from('ai_agents').select('*').eq('tenant_id', tenantId).eq('is_active', true).limit(1).maybeSingle(),
+        supabase.from('tenants').select('id, name, settings').eq('id', tenantId).maybeSingle(),
       ]);
 
+      const activeAgent = activeAgentRow || tenantData?.settings?.active_agent || (tenantData?.settings?.agents || []).find((a) => a.is_active) || null;
       const activeAI = (aiConfigs || []).find((c) => c.is_active) || (aiConfigs || [])[0];
 
       // Fetch last 10 messages for conversational context
@@ -367,7 +407,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
         .order('created_at', { ascending: true })
         .limit(10);
 
-      // 5. Execute AI Turn
+      // 5. Execute AI Turn with dynamic Agent Studio persona
       const { replyText, score, isHandoffReady, bookingTriggered } = await generateAIResponse({
         provider: activeAI?.provider || 'gemini',
         apiKey: activeAI?.api_key || '',
@@ -380,6 +420,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
         conversationHistory: pastMessages || [],
         latestMessage: messageText,
         bookingSettings: bookingSettings || null,
+        agent: activeAgent || null,
       });
 
       // Update lead score & status

@@ -10,6 +10,8 @@ import BookingsPage from '@/pages/Bookings';
 import OnboardingPage from '@/pages/Onboarding';
 import FeaturesGuidePage from '@/pages/FeaturesGuide';
 
+import AgentsStudio from '@/pages/AgentsStudio';
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -30,6 +32,8 @@ export default function App() {
         {/* Protected app routes */}
         <Route element={<AuthenticatedLayout />}>
           <Route path="/dashboard" element={<DashboardPage />} />
+          <Route path="/agents" element={<AgentsStudio />} />
+          <Route path="/studio" element={<AgentsStudio />} />
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/leads/:id" element={<LeadDetailPage />} />
           <Route path="/bookings" element={<BookingsPage />} />
