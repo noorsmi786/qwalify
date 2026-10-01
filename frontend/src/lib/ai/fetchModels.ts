@@ -156,14 +156,16 @@ async function fetchAnthropicModels(apiKey: string): Promise<FetchedModel[]> {
     }));
 }
 
-async function fetchOpenRouterModels(apiKey: string): Promise<FetchedModel[]> {
-  const res = await fetch('https://openrouter.ai/api/v1/models', {
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'HTTP-Referer': 'https://qwalify.online',
-      'X-Title': 'Qwalify AI',
-    },
-  });
+async function fetchOpenRouterModels(apiKey?: string): Promise<FetchedModel[]> {
+  const headers: Record<string, string> = {
+    'HTTP-Referer': 'https://qwalify.online',
+    'X-Title': 'Qwalify AI',
+  };
+  if (apiKey?.trim()) {
+    headers['Authorization'] = `Bearer ${apiKey.trim()}`;
+  }
+
+  const res = await fetch('https://openrouter.ai/api/v1/models', { headers });
 
   if (!res.ok) throw new Error(`OpenRouter error: HTTP ${res.status}`);
 
@@ -175,14 +177,16 @@ async function fetchOpenRouterModels(apiKey: string): Promise<FetchedModel[]> {
     pricing?: { prompt: string; completion: string };
   }>;
 
-  // Separate free and paid
-  const categorized = models
+  // Filter out non-chat / media models (embeddings, audio, image generation)
+  return models
     .filter(
       (m) =>
         !m.id.includes('embed') &&
         !m.id.includes('dall-e') &&
         !m.id.includes('tts') &&
-        !m.id.includes('whisper')
+        !m.id.includes('whisper') &&
+        !m.id.includes('flux') &&
+        !m.id.includes('stable-diffusion')
     )
     .map((m) => {
       const isFree =
@@ -190,7 +194,7 @@ async function fetchOpenRouterModels(apiKey: string): Promise<FetchedModel[]> {
         (m.pricing && parseFloat(m.pricing.prompt) === 0 && parseFloat(m.pricing.completion) === 0);
       return {
         id: m.id,
-        name: m.name,
+        name: m.name || m.id,
         context_length: m.context_length,
         tag: isFree ? 'Free' : undefined,
         is_free: Boolean(isFree),
@@ -201,9 +205,6 @@ async function fetchOpenRouterModels(apiKey: string): Promise<FetchedModel[]> {
       if (!a.is_free && b.is_free) return 1;
       return a.name.localeCompare(b.name);
     });
-
-  // Cap list to top 50 to keep UX manageable
-  return categorized.slice(0, 50);
 }
 
 async function fetchOpenAICompatibleModels(

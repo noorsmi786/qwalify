@@ -55,7 +55,7 @@ export function useDynamicModels() {
         openai: 20,
         anthropic: 20,
         gemini: 20,
-        openrouter: 20,
+        openrouter: 0, // OpenRouter models API is public, no key required
         groq: 20,
         grok: 10,
         mistral: 10,
@@ -63,7 +63,8 @@ export function useDynamicModels() {
         custom: 0,
       };
 
-      if (!apiKey || apiKey.length < (minKeyLen[provider] ?? 10)) {
+      const requiredLen = minKeyLen[provider] ?? 10;
+      if (requiredLen > 0 && (!apiKey || apiKey.length < requiredLen)) {
         // Key too short — reset to idle so provider shows static list
         setFetchStates((prev) => ({
           ...prev,

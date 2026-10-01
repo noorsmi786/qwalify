@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   Sparkles,
   ExternalLink,
@@ -16,6 +16,9 @@ import {
   RefreshCw,
   AlertCircle,
   WifiOff,
+  Search,
+  Edit3,
+  List,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Card, CardContent, CardHeader } from '@/components/ui/Card';
@@ -33,6 +36,13 @@ export function AIProvidersTab() {
 
   const [expandedGuide, setExpandedGuide] = useState<string | null>(null);
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
+  const [modelSearch, setModelSearch] = useState<Record<string, string>>({});
+  const [customModelMode, setCustomModelMode] = useState<Record<string, boolean>>({});
+
+  // Auto-fetch OpenRouter models on mount (OpenRouter endpoint is public)
+  useEffect(() => {
+    triggerFetch('openrouter', configs['openrouter']?.api_key || '');
+  }, []);
 
   // Simulator state
   const [simMessages, setSimMessages] = useState<
@@ -299,11 +309,35 @@ export function AIProvidersTab() {
                   </div>
                 </div>
 
-                {/* Model Selector — Dynamic */}
+                {/* Model Selector — Dynamic with Search & Custom ID support */}
                 <div>
-                  <div className="flex justify-between items-center mb-1">
-                    <label className="text-xs font-medium text-slate-300">Model</label>
-                    {fetchState.status === 'success' && (
+                  <div className="flex justify-between items-center mb-1.5">
+                    <div className="flex items-center gap-1.5">
+                      <label className="text-xs font-medium text-slate-300">Model</label>
+                      <span className="text-[10px] text-slate-500 font-mono">
+                        ({models.length} available)
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCustomModelMode((p) => ({ ...p, [provider.id]: !p[provider.id] }))
+                        }
+                        className="text-[10px] text-violet-400 hover:text-violet-300 flex items-center gap-1 transition-colors"
+                      >
+                        {customModelMode[provider.id] ? (
+                          <>
+                            <List className="w-3 h-3" /> Select from list
+                          </>
+                        ) : (
+                          <>
+                            <Edit3 className="w-3 h-3" /> Custom model ID
+                          </>
+                        )}
+                      </button>
+
                       <button
                         type="button"
                         onClick={() => triggerFetch(provider.id, config.api_key, config.custom_endpoint)}
@@ -311,67 +345,120 @@ export function AIProvidersTab() {
                       >
                         <RefreshCw className="w-3 h-3" /> Refresh
                       </button>
-                    )}
-                  </div>
-
-                  <div className="relative">
-                    <select
-                      value={config.model || provider.defaultModel}
-                      onChange={(e) => handleModelChange(provider.id, e.target.value)}
-                      disabled={fetchState.status === 'loading'}
-                      className="w-full bg-navy-900/90 border border-navy-600 text-slate-200 rounded-lg px-3 py-2 pr-8 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/50 appearance-none disabled:opacity-50"
-                    >
-                      {/* Grouped: free first, then paid for OpenRouter */}
-                      {provider.id === 'openrouter' ? (
-                        <>
-                          {models.filter((m) => m.is_free).length > 0 && (
-                            <optgroup label="── Free Models ──">
-                              {models
-                                .filter((m) => m.is_free)
-                                .map((m) => (
-                                  <option key={m.id} value={m.id}>
-                                    {m.name || m.id}
-                                    {m.context_length ? ` (${(m.context_length / 1000).toFixed(0)}k ctx)` : ''}
-                                  </option>
-                                ))}
-                            </optgroup>
-                          )}
-                          {models.filter((m) => !m.is_free).length > 0 && (
-                            <optgroup label="── Paid Models ──">
-                              {models
-                                .filter((m) => !m.is_free)
-                                .map((m) => (
-                                  <option key={m.id} value={m.id}>
-                                    {m.name || m.id}
-                                    {m.context_length ? ` (${(m.context_length / 1000).toFixed(0)}k ctx)` : ''}
-                                  </option>
-                                ))}
-                            </optgroup>
-                          )}
-                        </>
-                      ) : (
-                        models.map((m) => (
-                          <option key={m.id} value={m.id}>
-                            {m.name || m.id}
-                            {m.tag ? ` — ${m.tag}` : ''}
-                          </option>
-                        ))
-                      )}
-                    </select>
-
-                    {/* Status icon inside dropdown */}
-                    <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
-                      {fetchState.status === 'loading' ? (
-                        <Loader2 className="w-3.5 h-3.5 text-violet-400 animate-spin" />
-                      ) : fetchState.status === 'error' ? (
-                        <span title={fetchState.errorMsg || ''}>
-                          <WifiOff className="w-3.5 h-3.5 text-amber-500" />
-                        </span>
-                      ) : (
-                        <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
-                      )}
                     </div>
                   </div>
+
+                  {customModelMode[provider.id] ? (
+                    <div className="space-y-1">
+                      <input
+                        type="text"
+                        placeholder="e.g. deepseek/deepseek-r1 or meta-llama/llama-3.3-70b-instruct:free"
+                        value={config.model || ''}
+                        onChange={(e) => handleModelChange(provider.id, e.target.value)}
+                        className="w-full bg-navy-900/90 border border-violet-500/40 text-slate-100 placeholder-slate-600 rounded-lg px-3 py-2 text-xs font-mono focus:outline-none focus:ring-2 focus:ring-violet-500/50"
+                      />
+                      <p className="text-[10px] text-slate-500">
+                        Type or paste any exact model ID supported by {provider.name}.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {/* Search Filter for providers with many models (e.g. OpenRouter) */}
+                      {models.length > 8 && (
+                        <div className="relative">
+                          <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+                          <input
+                            type="text"
+                            placeholder={`Filter ${models.length} models (e.g. deepseek, llama, claude, free)...`}
+                            value={modelSearch[provider.id] || ''}
+                            onChange={(e) =>
+                              setModelSearch((p) => ({ ...p, [provider.id]: e.target.value }))
+                            }
+                            className="w-full bg-navy-950/70 border border-navy-700 text-slate-200 placeholder-slate-600 rounded-lg pl-8 pr-3 py-1.5 text-[11px] focus:outline-none focus:border-violet-500/50"
+                          />
+                        </div>
+                      )}
+
+                      {/* Dropdown */}
+                      <div className="relative">
+                        {(() => {
+                          const q = (modelSearch[provider.id] || '').toLowerCase().trim();
+                          const filtered = q
+                            ? models.filter(
+                                (m) =>
+                                  m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)
+                              )
+                            : models;
+
+                          return (
+                            <select
+                              value={config.model || provider.defaultModel}
+                              onChange={(e) => handleModelChange(provider.id, e.target.value)}
+                              disabled={fetchState.status === 'loading'}
+                              className="w-full bg-navy-900/90 border border-navy-600 text-slate-200 rounded-lg px-3 py-2 pr-8 text-xs focus:outline-none focus:ring-2 focus:ring-violet-500/50 appearance-none disabled:opacity-50"
+                            >
+                              {filtered.length === 0 ? (
+                                <option value="" disabled>
+                                  No models matching "{modelSearch[provider.id]}"
+                                </option>
+                              ) : provider.id === 'openrouter' ? (
+                                <>
+                                  {filtered.filter((m) => m.is_free).length > 0 && (
+                                    <optgroup label="── Free Models ──">
+                                      {filtered
+                                        .filter((m) => m.is_free)
+                                        .map((m) => (
+                                          <option key={m.id} value={m.id}>
+                                            {m.name || m.id}
+                                            {m.context_length
+                                              ? ` (${(m.context_length / 1000).toFixed(0)}k ctx)`
+                                              : ''}
+                                          </option>
+                                        ))}
+                                    </optgroup>
+                                  )}
+                                  {filtered.filter((m) => !m.is_free).length > 0 && (
+                                    <optgroup label="── Paid Models ──">
+                                      {filtered
+                                        .filter((m) => !m.is_free)
+                                        .map((m) => (
+                                          <option key={m.id} value={m.id}>
+                                            {m.name || m.id}
+                                            {m.context_length
+                                              ? ` (${(m.context_length / 1000).toFixed(0)}k ctx)`
+                                              : ''}
+                                          </option>
+                                        ))}
+                                    </optgroup>
+                                  )}
+                                </>
+                              ) : (
+                                filtered.map((m) => (
+                                  <option key={m.id} value={m.id}>
+                                    {m.name || m.id}
+                                    {m.tag ? ` — ${m.tag}` : ''}
+                                  </option>
+                                ))
+                              )}
+                            </select>
+                          );
+                        })()}
+
+                        {/* Status icon inside dropdown */}
+                        <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center pr-3">
+                          {fetchState.status === 'loading' ? (
+                            <Loader2 className="w-3.5 h-3.5 text-violet-400 animate-spin" />
+                          ) : fetchState.status === 'error' ? (
+                            <span title={fetchState.errorMsg || ''}>
+                              <WifiOff className="w-3.5 h-3.5 text-amber-500" />
+                            </span>
+                          ) : (
+                            <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
 
                   {fetchState.status === 'error' && fetchState.errorMsg && (
                     <p className="text-[10px] text-amber-400/80 mt-1 leading-relaxed">
