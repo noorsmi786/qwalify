@@ -144,8 +144,8 @@ function WhatsAppPanel() {
         }),
       }).catch(() => null);
 
-      // 2. Register Webhook in Evolution API
-      const supabaseEndpoint = import.meta.env.VITE_SUPABASE_URL || 'https://bmiwzknbsuqxxoeaatnt.supabase.co';
+      // 2. Register Webhook in Evolution API to our Qwalify webhook engine
+      const webhookUrl = `${window.location.origin}/webhook/whatsapp`;
       await fetch(`${evolutionUrl}/webhook/set/${instanceName}`, {
         method: 'POST',
         headers: {
@@ -155,9 +155,9 @@ function WhatsAppPanel() {
         body: JSON.stringify({
           webhook: {
             enabled: true,
-            url: `${supabaseEndpoint}/functions/v1/whatsapp-webhook`,
+            url: webhookUrl,
             webhookByEvents: false,
-            events: ['MESSAGES_UPSERT'],
+            events: ['MESSAGES_UPSERT', 'MESSAGES_UPDATE', 'SEND_MESSAGE'],
           },
         }),
       }).catch(() => null);

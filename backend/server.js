@@ -427,7 +427,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       }
 
       // 6. Send Reply to WhatsApp via Evolution API
-      const sendApiKey = body.apikey || data?.apikey || '75862081-0E3F-4326-850D-587B3D799D89';
+      const sendApiKey = body.apikey || data?.apikey || EVOLUTION_API_KEY;
       console.log(`[WhatsApp Outbound] To ${senderPhone} (score=${score}, status=${newStatus}): "${replyText}"`);
 
       try {
