@@ -1,6 +1,6 @@
-﻿import { useState } from 'react';
+import { useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { MessageSquarePlus, X, Send, Loader2, AlertCircle } from 'lucide-react';
+import { MessageSquarePlus, X, Send, Loader2 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { useAuthStore } from '@/store/authStore';
 import { toast } from 'sonner';
