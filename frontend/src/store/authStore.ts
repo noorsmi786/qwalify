@@ -1,4 +1,4 @@
-﻿import { create } from 'zustand';
+import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
 import type { User, Tenant } from '@/types';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
@@ -41,7 +41,7 @@ interface AuthState {
   updateTenantInfo: (updates: Partial<Tenant>) => Promise<void>;
 }
 
-type SetUserFromProfile = (profile: any, tenantData: any) => void;
+
 
 export const useAuthStore = create<AuthState>()(
   persist(
