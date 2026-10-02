@@ -9,15 +9,17 @@ import SettingsPage from '@/pages/Settings';
 import BookingsPage from '@/pages/Bookings';
 import OnboardingPage from '@/pages/Onboarding';
 import FeaturesGuidePage from '@/pages/FeaturesGuide';
-
 import AgentsStudio from '@/pages/AgentsStudio';
+import EmbedChat from '@/pages/EmbedChat';
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Public Landing Page */}
+        {/* Public Landing Page & Embed Chat Widget */}
         <Route path="/" element={<LandingPage />} />
+        <Route path="/embed" element={<EmbedChat />} />
+        <Route path="/embed/:agentId" element={<EmbedChat />} />
 
         {/* Auth routes */}
         <Route element={<AuthLayout />}>

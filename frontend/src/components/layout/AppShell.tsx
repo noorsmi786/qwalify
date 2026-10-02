@@ -15,6 +15,7 @@ import {
   Menu,
   X,
   Bot,
+  Search,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
@@ -228,8 +229,22 @@ export function Navbar() {
           </div>
         </div>
 
-        {/* Right: Notifications & Profile */}
+        {/* Right: Search, Notifications & Profile */}
         <div className="flex items-center gap-2 sm:gap-3">
+          <button
+            onClick={() => {
+              window.dispatchEvent(new KeyboardEvent('keydown', { key: 'k', metaKey: true, bubbles: true }));
+            }}
+            className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg border border-navy-700 bg-navy-800/80 hover:bg-navy-800 text-slate-400 hover:text-slate-200 text-xs transition-all"
+            title="Search or commands (Cmd+K / Ctrl+K)"
+          >
+            <Search className="w-3.5 h-3.5 text-slate-400" />
+            <span>Search...</span>
+            <kbd className="px-1.5 py-0.5 rounded bg-navy-900 border border-navy-700 text-[10px] font-mono text-slate-400">
+              ⌘K
+            </kbd>
+          </button>
+
           <button className="relative w-8 h-8 sm:w-9 sm:h-9 rounded-lg border border-navy-600 bg-navy-800 flex items-center justify-center text-slate-400 hover:text-slate-200 hover:border-violet-500/30 transition-all">
             <Bell className="w-4 h-4" />
             <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-violet-500" />

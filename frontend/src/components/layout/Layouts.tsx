@@ -3,6 +3,7 @@ import { motion } from 'framer-motion';
 import { Sidebar, Navbar, MobileBottomNav } from './AppShell';
 import { useAuthStore } from '@/store/authStore';
 import { FeedbackWidget } from '@/components/ui/FeedbackWidget';
+import { CommandPalette } from '@/components/layout/CommandPalette';
 
 export function AuthenticatedLayout() {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
@@ -30,6 +31,7 @@ export function AuthenticatedLayout() {
       </div>
       <MobileBottomNav />
       <FeedbackWidget />
+      <CommandPalette />
     </div>
   );
 }

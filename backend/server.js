@@ -92,6 +92,324 @@ app.post('/api/feedback', async (req, res) => {
   }
 });
 
+// ─── Outbound Webhook Dispatcher ──────────────────────────────────────────────
+async function dispatchOutboundWebhook(tenantId, eventName, payload) {
+  try {
+    const { data: tenant } = await supabase.from('tenants').select('settings').eq('id', tenantId).maybeSingle();
+    const webhookUrl = tenant?.settings?.outbound_webhook_url;
+    if (webhookUrl && (webhookUrl.startsWith('http://') || webhookUrl.startsWith('https://'))) {
+      await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'Qwalify-Outbound-Engine/1.0' },
+        body: JSON.stringify({
+          event: eventName,
+          data: payload,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+      console.log(`[Webhook] Dispatched ${eventName} to ${webhookUrl}`);
+    }
+  } catch (err) {
+    console.warn('[Webhook Error]:', err.message);
+  }
+}
+
+// ─── Instant Website Brain Scanner ───────────────────────────────────────────
+app.post('/api/scrape-knowledge', async (req, res) => {
+  try {
+    const { url, tenantId } = req.body;
+    if (!url || !url.startsWith('http')) {
+      return res.status(400).json({ error: 'Valid URL starting with http:// or https:// is required' });
+    }
+
+    console.log(`[Brain Scanner] Scraping URL: ${url}`);
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 10000);
+
+    const response = await fetch(url, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
+    });
+    clearTimeout(timeout);
+
+    if (!response.ok) {
+      return res.status(400).json({ error: `Failed to fetch website (${response.status} ${response.statusText})` });
+    }
+
+    const html = await response.text();
+
+    // Clean HTML to extract text content
+    const cleanedText = html
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
+      .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
+      .replace(/<noscript\b[^<]*(?:(?!<\/noscript>)<[^<]*)*<\/noscript>/gi, ' ')
+      .replace(/<svg\b[^<]*(?:(?!<\/svg>)<[^<]*)*<\/svg>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&[a-z0-9#]+;/gi, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 10000);
+
+    // Get active AI config for tenant
+    let aiConfig = null;
+    if (tenantId) {
+      const { data: configs } = await supabase.from('ai_provider_configs').select('*').eq('tenant_id', tenantId);
+      aiConfig = (configs || []).find((c) => c.is_active) || (configs || [])[0];
+    }
+
+    const prompt = `You are an expert AI business intelligence scanner. Analyze this website content and extract structured FAQs and qualification rules.
+
+Extract:
+1. business_name: string
+2. industry: one of "dental", "real_estate", "school", "salon", "b2b", "auto", "custom"
+3. tone: one of "empathetic", "professional", "friendly", "casual", "direct"
+4. knowledge_base: array of 4-8 items with format { "category": "...", "question": "...", "answer": "..." } covering pricing, location, hours, services, and policies.
+5. qualification_rules: array of 3-5 qualification questions with format { "id": "q1", "text": "...", "weight": 25, "example_answer": "..." }
+
+Return ONLY valid JSON matching that structure.
+
+RAW WEBSITE TEXT:
+${cleanedText}`;
+
+    let jsonResult = null;
+    const provider = aiConfig?.provider || 'gemini';
+    const apiKey = aiConfig?.api_key || '';
+    const model = aiConfig?.model || 'gemini-1.5-flash';
+
+    if (provider === 'gemini' && apiKey) {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json', temperature: 0.2, maxOutputTokens: 2048 },
+        }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        const text = d.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        jsonResult = JSON.parse(text);
+      }
+    } else if (apiKey) {
+      let baseUrl = 'https://api.openai.com/v1/chat/completions';
+      if (provider === 'groq') baseUrl = 'https://api.groq.com/openai/v1/chat/completions';
+      if (provider === 'openrouter') baseUrl = 'https://openrouter.ai/api/v1/chat/completions';
+      const r = await fetch(baseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: model || (provider === 'groq' ? 'llama-3.3-70b-versatile' : 'gpt-4o-mini'),
+          messages: [{ role: 'user', content: prompt }],
+          response_format: { type: 'json_object' },
+          temperature: 0.2,
+        }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        jsonResult = JSON.parse(d.choices?.[0]?.message?.content || '{}');
+      }
+    }
+
+    if (!jsonResult || !jsonResult.knowledge_base) {
+      const parsedUrl = new URL(url);
+      const domainName = parsedUrl.hostname.replace('www.', '').split('.')[0];
+      jsonResult = {
+        business_name: domainName.charAt(0).toUpperCase() + domainName.slice(1),
+        industry: 'custom',
+        tone: 'friendly',
+        knowledge_base: [
+          { category: 'Website', question: 'What is your official website?', answer: url },
+          { category: 'Services', question: 'What services do you offer?', answer: 'Please visit our website or ask our team for our full catalog of services and custom packages.' },
+          { category: 'Appointments', question: 'How can I book an appointment?', answer: 'You can book directly through our online scheduler or by letting us know your preferred date and time.' },
+        ],
+        qualification_rules: [
+          { id: 'q1', text: 'What service are you most interested in?', weight: 30, example_answer: 'Full consultation' },
+          { id: 'q2', text: 'When are you looking to get started?', weight: 25, example_answer: 'Within the next 7 days' },
+        ],
+      };
+    }
+
+    res.json({ success: true, data: jsonResult });
+  } catch (err) {
+    console.error('[Brain Scanner Error]:', err);
+    res.status(500).json({ error: err.message || 'Failed to scan website' });
+  }
+});
+
+// ─── Public Embeddable Web Chat Widget Endpoint ──────────────────────────────
+app.post('/api/widget/chat', async (req, res) => {
+  try {
+    const { agentId, tenantId, message, conversationId, leadName, leadContact } = req.body;
+    if (!message?.trim()) return res.status(400).json({ error: 'Message required' });
+
+    let targetTenantId = tenantId;
+    let targetAgent = null;
+
+    if (agentId) {
+      const { data: agentRow } = await supabase.from('ai_agents').select('*').eq('id', agentId).maybeSingle();
+      if (agentRow) {
+        targetAgent = agentRow;
+        targetTenantId = targetTenantId || agentRow.tenant_id;
+      }
+    }
+
+    if (!targetTenantId) {
+      const { data: firstTenant } = await supabase.from('tenants').select('id, name, settings').limit(1).maybeSingle();
+      targetTenantId = firstTenant?.id;
+      if (!targetAgent) {
+        targetAgent = firstTenant?.settings?.active_agent || (firstTenant?.settings?.agents || []).find((a) => a.is_active);
+      }
+    }
+
+    const [{ data: aiConfigs }, { data: bookingSettings }, { data: tenantData }] = await Promise.all([
+      supabase.from('ai_provider_configs').select('*').eq('tenant_id', targetTenantId),
+      supabase.from('booking_settings').select('*').eq('tenant_id', targetTenantId).maybeSingle(),
+      supabase.from('tenants').select('id, name, settings').eq('id', targetTenantId).maybeSingle(),
+    ]);
+
+    const activeAI = (aiConfigs || []).find((c) => c.is_active) || (aiConfigs || [])[0];
+    const companyName = tenantData?.name || 'Our Company';
+    if (!targetAgent) {
+      targetAgent = tenantData?.settings?.active_agent || (tenantData?.settings?.agents || []).find((a) => a.is_active);
+    }
+
+    const contact = leadContact || `web_${(conversationId || 'guest').slice(0, 12)}`;
+    let { data: lead } = await supabase.from('leads').select('*').eq('tenant_id', targetTenantId).eq('contact', contact).maybeSingle();
+    if (!lead) {
+      const { data: newLead } = await supabase.from('leads').insert({
+        tenant_id: targetTenantId,
+        full_name: leadName || 'Website Visitor',
+        contact,
+        source_channel: 'website',
+        status: 'qualifying',
+        score: 15,
+        last_contact_at: new Date().toISOString(),
+      }).select().single();
+      lead = newLead;
+    }
+
+    const { replyText, score, isHandoffReady, bookingTriggered } = await generateAIResponse({
+      provider: activeAI?.provider || 'gemini',
+      apiKey: activeAI?.api_key || '',
+      model: activeAI?.model || 'gemini-1.5-flash',
+      context: {
+        companyName,
+        leadName: leadName || 'Visitor',
+        currentScore: lead?.score || 15,
+      },
+      conversationHistory: [],
+      latestMessage: message,
+      bookingSettings,
+      agent: targetAgent,
+    });
+
+    const newStatus = score >= (targetAgent?.hot_threshold || 75) ? 'hot' : score >= 45 ? 'warm' : 'qualifying';
+    if (lead?.id) {
+      await supabase.from('leads').update({
+        score,
+        status: newStatus,
+        is_handoff_ready: isHandoffReady || false,
+        last_contact_at: new Date().toISOString(),
+      }).eq('id', lead.id);
+
+      if (newStatus === 'hot' || isHandoffReady) {
+        await dispatchOutboundWebhook(targetTenantId, 'lead.hot', {
+          lead: { ...lead, score, status: newStatus },
+          agent: targetAgent?.name,
+          source: 'website_widget',
+        });
+      }
+    }
+
+    res.json({
+      reply: replyText,
+      score,
+      status: newStatus,
+      isHandoffReady,
+      bookingTriggered,
+      bookingUrl: targetAgent?.booking_url || bookingSettings?.booking_url,
+    });
+  } catch (err) {
+    console.error('[Widget Chat Error]:', err);
+    res.status(500).json({ error: 'Failed to process chat message' });
+  }
+});
+
+// ─── Embeddable Widget Script (widget.js) ────────────────────────────────────
+app.get('/widget.js', (req, res) => {
+  res.setHeader('Content-Type', 'application/javascript');
+  res.send(`
+(function() {
+  var script = document.currentScript || document.querySelector('script[data-agent]');
+  var agentId = script ? script.getAttribute('data-agent') : '';
+  var host = window.location.origin.includes('localhost') ? 'https://qwalify.online' : window.location.origin;
+  var iframeUrl = host + '/embed/' + (agentId || 'default');
+
+  var container = document.createElement('div');
+  container.id = 'qwalify-chat-root';
+  container.style.position = 'fixed';
+  container.style.bottom = '24px';
+  container.style.right = '24px';
+  container.style.zIndex = '999999';
+  container.style.display = 'flex';
+  container.style.flexDirection = 'column';
+  container.style.alignItems = 'flex-end';
+  container.style.fontFamily = 'system-ui, -apple-system, sans-serif';
+
+  var btn = document.createElement('button');
+  btn.style.width = '60px';
+  btn.style.height = '60px';
+  btn.style.borderRadius = '50%';
+  btn.style.background = 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)';
+  btn.style.boxShadow = '0 10px 25px rgba(124, 58, 237, 0.45)';
+  btn.style.border = 'none';
+  btn.style.cursor = 'pointer';
+  btn.style.display = 'flex';
+  btn.style.alignItems = 'center';
+  btn.style.justifyContent = 'center';
+  btn.style.color = '#ffffff';
+  btn.style.fontSize = '26px';
+  btn.style.transition = 'all 0.25s ease';
+  btn.innerHTML = '⚡';
+
+  var frame = document.createElement('iframe');
+  frame.src = iframeUrl;
+  frame.style.width = '390px';
+  frame.style.height = '600px';
+  frame.style.maxHeight = 'calc(100vh - 120px)';
+  frame.style.maxWidth = 'calc(100vw - 48px)';
+  frame.style.border = 'none';
+  frame.style.borderRadius = '24px';
+  frame.style.boxShadow = '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1)';
+  frame.style.marginBottom = '16px';
+  frame.style.display = 'none';
+  frame.style.backgroundColor = '#0b0f19';
+
+  var isOpen = false;
+  btn.onclick = function() {
+    isOpen = !isOpen;
+    if (isOpen) {
+      frame.style.display = 'block';
+      btn.innerHTML = '✕';
+      btn.style.transform = 'scale(0.95)';
+    } else {
+      frame.style.display = 'none';
+      btn.innerHTML = '⚡';
+      btn.style.transform = 'scale(1)';
+    }
+  };
+
+  container.appendChild(frame);
+  container.appendChild(btn);
+  document.body.appendChild(container);
+})();
+  `);
+});
+
 
 
 async function generateAIResponse({ provider, apiKey, model, context, conversationHistory, latestMessage, bookingSettings, agent }) {

@@ -10,6 +10,7 @@ import {
   GripVertical,
   Plus,
   Minus,
+  Webhook,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Card, CardContent, CardHeader } from '@/components/ui/Card';
@@ -19,8 +20,9 @@ import { ChannelsTab } from '@/components/settings/ChannelsTab';
 import { CadenceSettingsTab } from '@/components/settings/CadenceSettingsTab';
 import { BookingSettingsTab } from '@/components/settings/BookingSettingsTab';
 import { TeamWorkspaceTab } from '@/components/settings/TeamWorkspaceTab';
+import { IntegrationsTab } from '@/components/settings/IntegrationsTab';
 
-type Tab = 'ai' | 'channels' | 'qualification' | 'cadence' | 'booking' | 'workspace';
+type Tab = 'ai' | 'channels' | 'qualification' | 'cadence' | 'booking' | 'integrations' | 'workspace';
 
 const MOCK_QUESTIONS = [
   { id: 'q1', text: 'What is your biggest challenge right now?', weight: 20 },
@@ -136,6 +138,7 @@ export default function SettingsPage() {
     { id: 'qualification', label: 'Qualification', icon: <Zap className="w-4 h-4" /> },
     { id: 'cadence', label: 'Follow-up Cadence', icon: <Clock className="w-4 h-4" /> },
     { id: 'booking', label: 'Booking & Calendar', icon: <Calendar className="w-4 h-4" /> },
+    { id: 'integrations', label: 'Integrations & Webhooks', icon: <Webhook className="w-4 h-4" /> },
     { id: 'workspace', label: 'Workspace', icon: <Building2 className="w-4 h-4" /> },
   ];
 
@@ -181,6 +184,7 @@ export default function SettingsPage() {
             {activeTab === 'qualification' && <QualificationTab />}
             {activeTab === 'cadence' && <CadenceTab />}
             {activeTab === 'booking' && <BookingSettingsTab />}
+            {activeTab === 'integrations' && <IntegrationsTab />}
             {activeTab === 'workspace' && <WorkspaceTab />}
           </motion.div>
         </div>

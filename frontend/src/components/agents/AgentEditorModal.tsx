@@ -52,6 +52,58 @@ export function AgentEditorModal({ agent, isOpen, onClose, onSave }: AgentEditor
   );
   const [isActive, setIsActive] = useState(agent?.is_active ?? true);
   const [isSaving, setIsSaving] = useState(false);
+  const [scanUrl, setScanUrl] = useState('');
+  const [isScanning, setIsScanning] = useState(false);
+
+  const handleScanWebsite = async () => {
+    if (!scanUrl.trim() || !scanUrl.startsWith('http')) {
+      toast.error('Please enter a valid URL starting with http:// or https://');
+      return;
+    }
+    setIsScanning(true);
+    try {
+      const res = await fetch('/api/scrape-knowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: scanUrl.trim() }),
+      });
+      const result = await res.json();
+      if (result.success && result.data) {
+        if (result.data.business_name) {
+          setName(result.data.business_name + ' Concierge');
+        }
+        if (result.data.industry && result.data.industry !== 'custom') {
+          setIndustry(result.data.industry);
+        }
+        if (result.data.tone) {
+          setTone(result.data.tone);
+        }
+        if (Array.isArray(result.data.knowledge_base) && result.data.knowledge_base.length > 0) {
+          setKnowledgeBase(result.data.knowledge_base.map((k: any, i: number) => ({
+            id: 'scanned_kb_' + i,
+            category: k.category || 'General',
+            question: k.question,
+            answer: k.answer,
+          })));
+        }
+        if (Array.isArray(result.data.qualification_rules) && result.data.qualification_rules.length > 0) {
+          setQualificationRules(result.data.qualification_rules.map((q: any, i: number) => ({
+            id: 'scanned_q_' + i,
+            text: q.text,
+            weight: q.weight || 25,
+            example_answer: q.example_answer || '',
+          })));
+        }
+        toast.success('⚡ Website scan complete! Knowledge base and qualification rules populated.');
+      } else {
+        throw new Error(result.error || 'Failed to scan website');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Brain scan failed');
+    } finally {
+      setIsScanning(false);
+    }
+  };
 
   // Simulator state
   const [simMessages, setSimMessages] = useState<{ sender: 'lead' | 'ai'; text: string; score?: number }[]>([
@@ -382,7 +434,40 @@ export function AgentEditorModal({ agent, isOpen, onClose, onSave }: AgentEditor
           {/* TAB 3: BUSINESS KNOWLEDGE (Q&A) */}
           {activeTab === 'knowledge' && (
             <div className="space-y-4">
-              <div className="flex items-center justify-between">
+              {/* Instant Website Brain Scanner */}
+              <div className="p-4 rounded-xl bg-gradient-to-r from-violet-950/40 via-navy-900 to-indigo-950/40 border border-violet-500/30 shadow-lg shadow-violet-950/30">
+                <div className="flex items-center gap-2 mb-1.5">
+                  <Sparkles className="w-4 h-4 text-violet-400" />
+                  <h4 className="text-xs font-bold text-slate-100">Instant AI Website Brain Scanner</h4>
+                  <span className="px-2 py-0.5 rounded-full bg-violet-600/20 text-violet-300 text-[10px] font-bold border border-violet-500/30">
+                    Auto-Extract
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-400 mb-3">
+                  Enter your business website URL and our AI engine will scan your services, pricing, hours, and policies automatically!
+                </p>
+                <div className="flex gap-2">
+                  <input
+                    type="url"
+                    value={scanUrl}
+                    onChange={(e) => setScanUrl(e.target.value)}
+                    placeholder="https://myclinic.com or https://mybusiness.com"
+                    disabled={isScanning}
+                    className="flex-1 bg-navy-900 border border-navy-700 focus:border-violet-500 rounded-lg px-3 py-2 text-xs text-slate-100 placeholder-slate-600 outline-none"
+                  />
+                  <Button
+                    size="sm"
+                    onClick={handleScanWebsite}
+                    loading={isScanning}
+                    disabled={!scanUrl.trim() || isScanning}
+                    className="text-xs font-semibold px-4"
+                  >
+                    {isScanning ? 'Scanning Website...' : '⚡ Scan & Train AI'}
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex items-center justify-between pt-2">
                 <div>
                   <h3 className="text-xs font-semibold text-slate-200">Business FAQs & Knowledge Cards</h3>
                   <p className="text-[11px] text-slate-400">
