@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import {
   MessageSquare,
   Sparkles,
@@ -169,6 +170,16 @@ export default function SettingsPage() {
               )}
             </button>
           ))}
+
+          <div className="pt-3 border-t border-navy-700/60 mt-3">
+            <Link
+              to="/onboarding"
+              className="w-full flex items-center justify-center gap-2 px-3.5 py-2.5 rounded-xl text-xs font-semibold bg-violet-600/15 hover:bg-violet-600/25 text-violet-300 border border-violet-500/30 transition-all text-center"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Launch Setup Wizard</span>
+            </Link>
+          </div>
         </div>
 
         {/* Tab content */}

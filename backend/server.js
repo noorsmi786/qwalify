@@ -240,6 +240,110 @@ ${cleanedText}`;
   }
 });
 
+// ─── AI Assistant Rule Generator from Plain Business Description ─────────────
+app.post('/api/generate-assistant-rules', async (req, res) => {
+  try {
+    const { businessDescription, businessName, industry, tenantId } = req.body;
+    if (!businessDescription?.trim()) {
+      return res.status(400).json({ error: 'Business description is required' });
+    }
+
+    console.log(`[Assistant Rule Gen] Generating rules for "${businessName || 'Business'}"`);
+
+    let aiConfig = null;
+    if (tenantId) {
+      const { data: configs } = await supabase.from('ai_provider_configs').select('*').eq('tenant_id', tenantId);
+      aiConfig = (configs || []).find((c) => c.is_active) || (configs || [])[0];
+    }
+
+    const prompt = `You are an expert sales qualification architect. A non-technical business owner just described their business and ideal customer in their own words.
+
+BUSINESS NAME: "${businessName || 'Our Business'}"
+INDUSTRY: "${industry || 'general'}"
+BUSINESS & IDEAL CUSTOMER DESCRIPTION:
+"${businessDescription}"
+
+Based on this description, automatically create:
+1. "greeting": A warm, natural 1-sentence opening message for WhatsApp / live chat.
+2. "qualification_rules": Array of 3-5 high-impact qualification questions (each with "id", "text", "weight" between 15-35, and "example_answer") that systematically verify if an inbound lead matches their ideal customer.
+3. "knowledge_base": Array of 4-6 essential FAQ cards ("category", "question", "answer") derived from the description (e.g. Services, Pricing/Budget, Booking, Location/Hours, Process).
+4. "suggested_tone": "friendly" | "professional" | "casual" | "empathetic" | "direct"
+
+Return ONLY valid JSON matching this exact structure:
+{
+  "greeting": "...",
+  "suggested_tone": "...",
+  "qualification_rules": [
+    { "id": "q1", "text": "...", "weight": 25, "example_answer": "..." }
+  ],
+  "knowledge_base": [
+    { "category": "Services", "question": "...", "answer": "..." }
+  ]
+}`;
+
+    let jsonResult = null;
+    const provider = aiConfig?.provider || 'gemini';
+    const apiKey = aiConfig?.api_key || '';
+    const model = aiConfig?.model || 'gemini-1.5-flash';
+
+    if (provider === 'gemini' && apiKey) {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json', temperature: 0.3, maxOutputTokens: 2048 },
+        }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        const text = d.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
+        jsonResult = JSON.parse(text);
+      }
+    } else if (apiKey) {
+      let baseUrl = 'https://api.openai.com/v1/chat/completions';
+      if (provider === 'groq') baseUrl = 'https://api.groq.com/openai/v1/chat/completions';
+      if (provider === 'openrouter') baseUrl = 'https://openrouter.ai/api/v1/chat/completions';
+      const r = await fetch(baseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: model || (provider === 'groq' ? 'llama-3.3-70b-versatile' : 'gpt-4o-mini'),
+          messages: [{ role: 'user', content: prompt }],
+          response_format: { type: 'json_object' },
+          temperature: 0.3,
+        }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        jsonResult = JSON.parse(d.choices?.[0]?.message?.content || '{}');
+      }
+    }
+
+    if (!jsonResult || !jsonResult.qualification_rules) {
+      jsonResult = {
+        greeting: `Hi there! 👋 Thanks for reaching out to ${businessName || 'us'}. How can we help you today?`,
+        suggested_tone: 'friendly',
+        qualification_rules: [
+          { id: 'q1', text: 'What specific service or help are you looking for?', weight: 30, example_answer: 'Consultation & Pricing' },
+          { id: 'q2', text: 'When are you hoping to get started?', weight: 25, example_answer: 'Within 7-14 days' },
+          { id: 'q3', text: 'What is your estimated budget or scale?', weight: 20, example_answer: 'Standard package' },
+        ],
+        knowledge_base: [
+          { category: 'Overview', question: `What does ${businessName || 'your business'} specialize in?`, answer: businessDescription.slice(0, 200) },
+          { category: 'Appointments', question: 'How do I book an appointment?', answer: 'We offer flexible online booking slots or can assist you directly here.' },
+        ],
+      };
+    }
+
+    res.json({ success: true, data: jsonResult });
+  } catch (err) {
+    console.error('[Assistant Rule Gen Error]:', err);
+    res.status(500).json({ error: err.message || 'Failed to generate assistant rules' });
+  }
+});
+
 // ─── Public Embeddable Web Chat Widget Endpoint ──────────────────────────────
 app.post('/api/widget/chat', async (req, res) => {
   try {

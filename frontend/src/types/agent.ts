@@ -40,6 +40,8 @@ export interface AIAgent {
   qualification_rules: QualificationQuestion[];
   hot_threshold: number;
   warm_threshold: number;
+  followup_cadence?: 'gentle' | 'balanced' | 'aggressive';
+  business_description?: string;
   booking_url?: string;
   meeting_duration_mins: number;
   is_active: boolean;
