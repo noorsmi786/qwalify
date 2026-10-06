@@ -543,6 +543,10 @@ export function BotSetupWizard({ initialAgent, onComplete, isStandalonePage = tr
           tenantId: tenant?.id,
           message: userText,
           leadName: 'Preview Customer',
+          conversationHistory: chatMessages.map((m) => ({
+            sender: m.sender,
+            content: m.text,
+          })),
         }),
       });
       if (res.ok) {

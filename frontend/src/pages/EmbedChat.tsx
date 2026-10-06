@@ -68,6 +68,10 @@ export default function EmbedChat() {
           message: userText,
           leadName: leadName || 'Visitor',
           conversationId: 'web_' + (leadName ? leadName.toLowerCase().replace(/\s+/g, '_') : 'guest'),
+          conversationHistory: messages.map((m) => ({
+            sender: m.sender,
+            content: m.text,
+          })),
         }),
       });
 

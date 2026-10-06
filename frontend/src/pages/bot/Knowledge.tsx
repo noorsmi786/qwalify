@@ -1,31 +1,76 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Upload, Globe, Plus, Trash2, FileText, Save, Loader2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
+import { useAgents } from '@/hooks/useAgents';
+import { useAuthStore } from '@/store/authStore';
 import { toast } from 'sonner';
 
 interface FAQ {
   id: string;
   question: string;
   answer: string;
+  category?: string;
 }
 
 export default function BotKnowledgePage() {
+  const { tenant } = useAuthStore();
+  const { agents, updateAgent, createAgent } = useAgents();
+  const activeAgent = agents.find((a) => a.is_active) || agents[0];
+
   const [websiteUrl, setWebsiteUrl] = useState('');
   const [isScraping, setIsScraping] = useState(false);
   const [uploadedFiles, setUploadedFiles] = useState<string[]>([]);
   const [faqs, setFaqs] = useState<FAQ[]>([
-    { id: '1', question: '', answer: '' },
+    { id: '1', question: '', answer: '', category: 'General' },
   ]);
   const [saving, setSaving] = useState(false);
 
+  // Sync state when activeAgent loads
+  useEffect(() => {
+    if (activeAgent?.knowledge_base && activeAgent.knowledge_base.length > 0) {
+      setFaqs(
+        activeAgent.knowledge_base.map((k, i) => ({
+          id: k.id || `faq_${i + 1}`,
+          question: k.question || '',
+          answer: k.answer || '',
+          category: k.category || 'General',
+        }))
+      );
+    }
+  }, [activeAgent?.id]);
+
   const handleScrapeWebsite = async () => {
-    if (!websiteUrl.trim()) return;
+    if (!websiteUrl.trim() || !websiteUrl.startsWith('http')) {
+      toast.error('Please enter a valid website URL starting with http:// or https://');
+      return;
+    }
     setIsScraping(true);
     try {
-      await new Promise((r) => setTimeout(r, 1200));
-      toast.success('Website content imported! Your bot can now answer questions about it.');
+      const res = await fetch('/api/scrape-knowledge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: websiteUrl.trim(), tenantId: tenant?.id }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        if (data.data?.knowledge_base?.length) {
+          const scraped = data.data.knowledge_base.map((k: any, i: number) => ({
+            id: `scraped_${Date.now()}_${i}`,
+            question: k.question || '',
+            answer: k.answer || '',
+            category: k.category || 'Website',
+          }));
+          setFaqs((prev) => [...prev.filter((f) => f.question.trim()), ...scraped]);
+          toast.success(`⚡ Extracted ${scraped.length} facts from website! Click 'Save Knowledge Base' to apply.`);
+        } else {
+          toast.success('Website scanned successfully!');
+        }
+      } else {
+        throw new Error('Failed to scan website');
+      }
     } catch {
       toast.error('Could not read that website. Please check the URL and try again.');
     } finally {
@@ -37,28 +82,54 @@ export default function BotKnowledgePage() {
     const files = Array.from(e.target.files || []);
     const names = files.map((f) => f.name);
     setUploadedFiles((prev) => [...prev, ...names]);
-    toast.success(`${names.length} file(s) uploaded successfully.`);
+
+    // Add placeholder items for uploaded files so bot knows doc topics
+    const fileFaqs: FAQ[] = names.map((name, i) => ({
+      id: `doc_${Date.now()}_${i}`,
+      question: `What information is in document ${name}?`,
+      answer: `Refer to uploaded business document: ${name}.`,
+      category: 'Document',
+    }));
+    setFaqs((prev) => [...prev.filter((f) => f.question.trim()), ...fileFaqs]);
+    toast.success(`${names.length} file(s) attached to knowledge base.`);
   };
 
   const handleAddFaq = () => {
-    setFaqs((prev) => [...prev, { id: Date.now().toString(), question: '', answer: '' }]);
+    setFaqs((prev) => [...prev, { id: Date.now().toString(), question: '', answer: '', category: 'General' }]);
   };
 
   const handleRemoveFaq = (id: string) => {
     setFaqs((prev) => prev.filter((f) => f.id !== id));
   };
 
-  const handleFaqChange = (id: string, field: 'question' | 'answer', value: string) => {
+  const handleFaqChange = (id: string, field: 'question' | 'answer' | 'category', value: string) => {
     setFaqs((prev) => prev.map((f) => (f.id === id ? { ...f, [field]: value } : f)));
   };
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await new Promise((r) => setTimeout(r, 700));
-      toast.success('Knowledge base saved! Your bot will use this to answer questions.');
+      const validFaqs = faqs.filter((f) => f.question.trim() && f.answer.trim()).map((f) => ({
+        id: f.id,
+        category: f.category || 'General',
+        question: f.question.trim(),
+        answer: f.answer.trim(),
+      }));
+
+      if (activeAgent?.id) {
+        await updateAgent(activeAgent.id, {
+          knowledge_base: validFaqs,
+        });
+      } else {
+        await createAgent({
+          industry: 'custom',
+          knowledge_base: validFaqs,
+          is_active: true,
+        });
+      }
+      toast.success('Knowledge base saved! Your bot will use this to answer customer questions.');
     } catch {
-      toast.error('Failed to save. Please try again.');
+      toast.error('Failed to save knowledge base. Please try again.');
     } finally {
       setSaving(false);
     }

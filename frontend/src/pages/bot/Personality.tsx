@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Smile, ChevronDown, ChevronUp, Save, Loader2 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -34,26 +34,45 @@ const TONE_OPTIONS: {
 ];
 
 export default function BotPersonalityPage() {
-  const { agents, isLoading } = useAgents();
-  const agent = agents[0];
+  const { agents, isLoading, updateAgent, createAgent } = useAgents();
+  const activeAgent = agents.find((a) => a.is_active) || agents[0];
 
-  const [tone, setTone] = useState<ToneType>(agent?.tone || 'friendly');
-  const [description, setDescription] = useState<string>(
-    agent?.business_description || ''
-  );
+  const [tone, setTone] = useState<ToneType>('friendly');
+  const [description, setDescription] = useState<string>('');
   const [showAdvanced, setShowAdvanced] = useState(false);
-  const [systemPrompt, setSystemPrompt] = useState<string>(
-    agent?.custom_system_prompt || ''
-  );
+  const [systemPrompt, setSystemPrompt] = useState<string>('');
   const [saving, setSaving] = useState(false);
+
+  // Sync state when activeAgent loads
+  useEffect(() => {
+    if (activeAgent) {
+      setTone(activeAgent.tone || 'friendly');
+      setDescription(activeAgent.business_description || '');
+      setSystemPrompt(activeAgent.custom_system_prompt || '');
+    }
+  }, [activeAgent?.id]);
 
   const handleSave = async () => {
     setSaving(true);
     try {
-      await new Promise((r) => setTimeout(r, 700));
-      toast.success('Bot personality saved!');
+      if (activeAgent?.id) {
+        await updateAgent(activeAgent.id, {
+          tone,
+          business_description: description.trim(),
+          custom_system_prompt: systemPrompt.trim(),
+        });
+      } else {
+        await createAgent({
+          industry: 'custom',
+          tone,
+          business_description: description.trim(),
+          custom_system_prompt: systemPrompt.trim(),
+          is_active: true,
+        });
+      }
+      toast.success('Bot personality & prompt saved successfully!');
     } catch {
-      toast.error('Failed to save. Please try again.');
+      toast.error('Failed to save personality. Please try again.');
     } finally {
       setSaving(false);
     }

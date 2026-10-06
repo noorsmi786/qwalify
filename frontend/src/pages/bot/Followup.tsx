@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Zap,
@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
+import { useAgents } from '@/hooks/useAgents';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 
@@ -84,6 +85,9 @@ interface FollowupStep {
 }
 
 export default function BotFollowupPage() {
+  const { agents, updateAgent } = useAgents();
+  const activeAgent = agents.find((a) => a.is_active) || agents[0];
+
   const [preset, setPreset] = useState<CadencePreset>('balanced');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [steps, setSteps] = useState<FollowupStep[]>([
@@ -95,6 +99,15 @@ export default function BotFollowupPage() {
   const [stopOnBooking, setStopOnBooking] = useState(true);
   const [businessHoursOnly, setBusinessHoursOnly] = useState(false);
   const [saving, setSaving] = useState(false);
+
+  // Sync state when activeAgent loads
+  useEffect(() => {
+    if (activeAgent?.followup_cadence) {
+      if (['gentle', 'balanced', 'aggressive'].includes(activeAgent.followup_cadence)) {
+        setPreset(activeAgent.followup_cadence as CadencePreset);
+      }
+    }
+  }, [activeAgent?.id]);
 
   const handleAddStep = () => {
     setSteps((prev) => [
@@ -114,10 +127,27 @@ export default function BotFollowupPage() {
   const handleSave = async () => {
     setSaving(true);
     try {
-      await new Promise((r) => setTimeout(r, 700));
-      toast.success('Follow-up rules saved!');
+      if (activeAgent?.id) {
+        await updateAgent(activeAgent.id, {
+          followup_cadence: showAdvanced ? 'custom' : (preset as any),
+          followup_config: {
+            cadence: showAdvanced ? 'custom' : (preset as any),
+            isCustom: showAdvanced,
+            stopOnReply,
+            stopOnBooking,
+            onlyBusinessHours: businessHoursOnly,
+            steps: steps.map((s) => ({
+              id: s.id,
+              delayHours: s.delay.includes('d') ? parseInt(s.delay) * 24 : parseInt(s.delay),
+              delayLabel: s.delay,
+              template: s.message,
+            })),
+          },
+        });
+      }
+      toast.success('Follow-up rules saved successfully!');
     } catch {
-      toast.error('Failed to save. Please try again.');
+      toast.error('Failed to save follow-up rules.');
     } finally {
       setSaving(false);
     }

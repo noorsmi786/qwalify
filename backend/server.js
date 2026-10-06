@@ -901,16 +901,280 @@ Return ONLY valid JSON matching this exact structure:
   }
 });
 
-// ─── Public Embeddable Web Chat Widget Endpoint ──────────────────────────────
+// ─── Dynamic Knowledge Base Relevance Retrieval ──────────────────────────────
+function retrieveRelevantKnowledge(knowledgeBase, query, conversationHistory = [], maxChunks = 4) {
+  if (!Array.isArray(knowledgeBase) || knowledgeBase.length === 0) return [];
+  
+  const historyText = conversationHistory
+    .filter((m) => m.role === 'user' || m.sender === 'lead' || m.sender === 'user')
+    .slice(-3)
+    .map((m) => m.content || m.text || '')
+    .join(' ');
+  
+  const fullContext = `${query || ''} ${historyText}`.toLowerCase();
+  const stopWords = new Set([
+    'the', 'is', 'at', 'which', 'on', 'a', 'an', 'and', 'or', 'in', 'to', 'for', 'of',
+    'with', 'about', 'can', 'you', 'how', 'what', 'do', 'i', 'my', 'we', 'are', 'your', 'me', 'please'
+  ]);
+  const queryTokens = fullContext
+    .replace(/[^\w\s]/g, ' ')
+    .split(/\s+/)
+    .filter((t) => t.length > 2 && !stopWords.has(t));
+
+  const scored = knowledgeBase.map((item) => {
+    const qText = (item.question || '').toLowerCase();
+    const aText = (item.answer || '').toLowerCase();
+    const catText = (item.category || '').toLowerCase();
+
+    let score = 0;
+    for (const token of queryTokens) {
+      if (qText.includes(token)) score += 4;
+      else if (catText.includes(token)) score += 2;
+      else if (aText.includes(token)) score += 1;
+    }
+
+    if (/price|pricing|cost|fee|rate|package|hours|location|address|book|appointment|service/i.test(catText) && score > 0) {
+      score += 1;
+    }
+
+    return { item, score };
+  });
+
+  scored.sort((a, b) => b.score - a.score);
+  const positive = scored.filter((s) => s.score > 0).map((s) => s.item);
+  if (positive.length > 0) {
+    return positive.slice(0, maxChunks);
+  }
+  return knowledgeBase.slice(0, 2);
+}
+
+// ─── Core AI Qualification Engine ─────────────────────────────────────────────
+async function generateAIResponse({ provider, apiKey, model, context, conversationHistory, latestMessage, bookingSettings, agent }) {
+  const hotThreshold = agent?.hot_threshold || bookingSettings?.hot_score_threshold || 75;
+  const bookingUrl = agent?.booking_url || bookingSettings?.booking_url || null;
+
+  const toneDesc = {
+    empathetic: 'Warm, compassionate, reassuring, and attentive. Show genuine care in every reply.',
+    professional: 'Polite, clear, business-focused, authoritative, and concise. Deliver confidence.',
+    friendly: 'Warm, welcoming, energetic, helpful, and conversational like a trusted advisor.',
+    casual: 'Modern, vibrant, relaxed, conversational, and direct.',
+    direct: 'Fast, clear, efficient, no fluff, straight to the point.',
+  }[agent?.tone || 'friendly'] || 'Polite, natural, and helpful.';
+
+  const emojiDesc = {
+    none: 'Do NOT use emojis under any circumstances.',
+    subtle: 'Use at most 1 tasteful emoji every 1-2 messages (e.g. 👋, 📅, ✨).',
+    expressive: 'Use friendly, expressive emojis naturally throughout the conversation.',
+  }[agent?.emoji_style || 'subtle'] || 'Use 1 subtle emoji when natural.';
+
+  const relevantKB = retrieveRelevantKnowledge(agent?.knowledge_base, latestMessage, conversationHistory, 4);
+  let kbSection = '';
+  if (relevantKB.length > 0) {
+    kbSection = `VERIFIED BUSINESS FACTS & KNOWLEDGE (Use these to answer accurately. NEVER invent facts outside of this):\n` +
+      relevantKB.map((k) => `• [${k.category || 'General'}] Q: ${k.question} -> A: ${k.answer}`).join('\n') + '\n\n';
+  }
+
+  let qrSection = `KEY QUALIFICATION TARGETS (Discover naturally across the conversation, one by one):\n`;
+  if (Array.isArray(agent?.qualification_rules) && agent.qualification_rules.length > 0) {
+    qrSection += agent.qualification_rules
+      .map((q, i) => `${i + 1}. ${q.text} (Weight: ${q.weight || 20} pts${q.example_answer ? ` - Target: ${q.example_answer}` : ''})`)
+      .join('\n') + '\n\n';
+  } else {
+    qrSection += `1. Specific service or need\n2. Urgency and project timeline\n3. Estimated budget or scope\n\n`;
+  }
+
+  const businessDescription = agent?.business_description || `${context.companyName} is in the ${agent?.industry || 'business'} industry.`;
+  const rawCustomPrompt = agent?.custom_system_prompt?.trim() || '';
+
+  const systemPrompt = `You are "${agent?.name || 'Qwalify Assistant'}", an expert qualification and sales assistant for "${context.companyName}".
+You are communicating directly with a prospect on WhatsApp / Live Chat.
+
+BUSINESS OVERVIEW & IDEAL CLIENT:
+${businessDescription}
+
+${rawCustomPrompt ? `TENANT CUSTOM PROMPT OVERRIDE (High Priority):\n${rawCustomPrompt}\n\n` : ''}${kbSection}${qrSection}PROSPECT & SESSION STATUS:
+- Prospect Name: ${context.leadName || 'Visitor'}
+- Current Qualification Score: ${context.currentScore || 15}/100
+- Hot Lead Threshold: ${hotThreshold}/100
+- Booking Link: ${bookingUrl || '(Not configured)'}
+
+CORE CONVERSATIONAL & QUALIFICATION RULES:
+1. QUALIFICATION GOAL (NOT JUST CHAT): Your primary mission is to systematically discover their intent, timeline, budget, and specific requirements to qualify them for our team.
+2. ONE QUESTION AT A TIME: NEVER interrogate the prospect. Ask strictly ONE focused question per reply.
+3. ACTIVE LISTENING & ADAPTABILITY: Acknowledge what the prospect already said before moving forward. Never repeat questions they already answered.
+4. BUYING-INTENT RECOGNITION & SCORING:
+   - Recognize high-intent signals (concrete budget range, immediate timeline "this week", asking "how do I start?", requesting private quote/booking) and increase the qualification score significantly (+15 to +35 pts).
+   - When score reaches ${hotThreshold} OR when the prospect asks to book/schedule, provide the booking link smoothly: "${bookingUrl || 'https://calendly.com'}"
+5. STRICT HONESTY & NO HALLUCINATIONS:
+   - ONLY state facts, prices, and policies explicitly verified in the BUSINESS FACTS section above.
+   - If the prospect asks something NOT covered in the knowledge base, do NOT guess. Honestly state: "I want to get you the exact details on that — I'll have one of our team specialists confirm and follow up with you right away! In the meantime, [continue qualification / ask next question]."
+6. STYLE & TONE:
+   - Selected Tone: ${toneDesc}
+   - Emojis: ${emojiDesc}
+   - Length: Strictly 1 to 2 conversational, punchy sentences.
+   - Format: Plain text only. NEVER use markdown headers, asterisks (**), or bullet lists.
+   - NEVER mention you are an AI model.
+
+MANDATORY RESPONSE METADATA:
+At the very end of your response, output this exact JSON block:
+<qualification_json>
+{
+  "new_score": <number between 0 and 100 based on all qualification signals gathered>,
+  "score_reason": "<1 concise sentence explaining the score progression>",
+  "is_handoff_ready": <true if score >= ${hotThreshold} or prospect requested human, else false>,
+  "booking_triggered": <true if booking link was provided in this reply, else false>
+}
+</qualification_json>`;
+
+  const formattedHistory = (conversationHistory || []).map((m) => ({
+    role: (m.sender === 'lead' || m.sender === 'user' || m.role === 'user') ? 'user' : 'assistant',
+    content: m.content || m.text || '',
+  })).filter((m) => m.content?.trim());
+
+  const messages = [
+    ...formattedHistory,
+    { role: 'user', content: latestMessage },
+  ];
+
+  let rawReply = '';
+
+  // 1. Direct Anthropic / Claude Messages API
+  if ((provider === 'anthropic' || provider === 'claude') && apiKey) {
+    try {
+      const claudeMessages = messages.map((m) => ({ role: m.role, content: m.content }));
+      const r = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+          'anthropic-version': '2023-06-01',
+        },
+        body: JSON.stringify({
+          model: model || 'claude-3-5-sonnet-20241022',
+          max_tokens: 400,
+          system: systemPrompt,
+          messages: claudeMessages,
+        }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        rawReply = d.content?.[0]?.text || '';
+      } else {
+        console.error('Anthropic API error:', await r.text());
+      }
+    } catch (e) {
+      console.error('Anthropic call exception:', e);
+    }
+  } else if (provider === 'gemini' && apiKey) {
+    // 2. Google Gemini API
+    try {
+      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model || 'gemini-1.5-flash'}:generateContent?key=${apiKey}`;
+      const geminiContents = messages.map((m) => ({
+        role: m.role === 'user' ? 'user' : 'model',
+        parts: [{ text: m.content }],
+      }));
+      const r = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          systemInstruction: { parts: [{ text: systemPrompt }] },
+          contents: geminiContents,
+          generationConfig: { maxOutputTokens: 350, temperature: 0.3 },
+        }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        rawReply = d.candidates?.[0]?.content?.parts?.[0]?.text || '';
+      } else {
+        console.error('Gemini API error:', await r.text());
+      }
+    } catch (e) {
+      console.error('Gemini call exception:', e);
+    }
+  } else if (apiKey) {
+    // 3. OpenAI / Groq / OpenRouter / Mistral / Grok Chat Completions
+    let baseUrl = 'https://api.openai.com/v1/chat/completions';
+    if (provider === 'groq') baseUrl = 'https://api.groq.com/openai/v1/chat/completions';
+    if (provider === 'openrouter') baseUrl = 'https://openrouter.ai/api/v1/chat/completions';
+    if (provider === 'mistral') baseUrl = 'https://api.mistral.ai/v1/chat/completions';
+    if (provider === 'grok') baseUrl = 'https://api.x.ai/v1/chat/completions';
+
+    try {
+      const r = await fetch(baseUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model: model || (provider === 'groq' ? 'llama-3.3-70b-versatile' : provider === 'openrouter' ? 'anthropic/claude-3.5-sonnet' : 'gpt-4o-mini'),
+          messages: [
+            { role: 'system', content: systemPrompt },
+            ...messages,
+          ],
+          temperature: 0.3,
+          max_tokens: 350,
+        }),
+      });
+      if (r.ok) {
+        const d = await r.json();
+        rawReply = d.choices?.[0]?.message?.content || '';
+      } else {
+        console.error(`${provider} API error:`, await r.text());
+      }
+    } catch (e) {
+      console.error(`${provider} call exception:`, e);
+    }
+  }
+
+  // Fallback if provider error
+  if (!rawReply) {
+    const isReady = (context.currentScore || 15) >= hotThreshold;
+    rawReply = `Thanks for reaching out! How soon are you looking to get started?
+<qualification_json>
+{"new_score": ${Math.min(100, (context.currentScore || 15) + 15)}, "score_reason": "Inquiry acknowledged, gathering timeline", "is_handoff_ready": ${isReady}, "booking_triggered": false}
+</qualification_json>`;
+  }
+
+  const jsonRegex = /<qualification_json>([\s\S]*?)<\/qualification_json>/i;
+  const match = rawReply.match(jsonRegex);
+  let score = context.currentScore || 15;
+  let scoreReason = 'Qualification updated';
+  let isHandoffReady = false;
+  let bookingTriggered = false;
+
+  if (match?.[1]) {
+    try {
+      const parsed = JSON.parse(match[1].trim());
+      if (typeof parsed.new_score === 'number') score = Math.min(100, Math.max(0, Math.round(parsed.new_score)));
+      if (parsed.score_reason) scoreReason = parsed.score_reason;
+      if (typeof parsed.is_handoff_ready === 'boolean') isHandoffReady = parsed.is_handoff_ready;
+      if (typeof parsed.booking_triggered === 'boolean') bookingTriggered = parsed.booking_triggered;
+    } catch (e) {
+      console.warn('Failed to parse qualification JSON:', e);
+    }
+  }
+
+  let replyText = rawReply
+    .replace(jsonRegex, '')
+    .replace(/[*_~`#>]+/g, '')
+    .trim();
+
+  const sentences = replyText.match(/[^.!?]+[.!?](?:\s|$)|[^.!?]+$/g) || [];
+  if (sentences.length > 2) {
+    replyText = sentences.slice(0, 2).join(' ').trim();
+  }
+
+  return { replyText, score, scoreReason, isHandoffReady, bookingTriggered };
+}
+
+// ─── Public Embeddable Web Chat & Simulator Endpoint ─────────────────────────
 app.post('/api/widget/chat', async (req, res) => {
   try {
-    const { agentId, tenantId, message, conversationId, leadName, leadContact } = req.body;
+    const { agentId, tenantId, message, conversationId, leadName, leadContact, conversationHistory } = req.body;
     if (!message?.trim()) return res.status(400).json({ error: 'Message required' });
 
     let targetTenantId = tenantId;
     let targetAgent = null;
 
-    if (agentId) {
+    if (agentId && agentId !== 'default') {
       const { data: agentRow } = await supabase.from('ai_agents').select('*').eq('id', agentId).maybeSingle();
       if (agentRow) {
         targetAgent = agentRow;
@@ -938,7 +1202,7 @@ app.post('/api/widget/chat', async (req, res) => {
       targetAgent = tenantData?.settings?.active_agent || (tenantData?.settings?.agents || []).find((a) => a.is_active);
     }
 
-    const contact = leadContact || `web_${(conversationId || 'guest').slice(0, 12)}`;
+    const contact = leadContact || `web_${(conversationId || 'guest').slice(0, 18)}`;
     let { data: lead } = await supabase.from('leads').select('*').eq('tenant_id', targetTenantId).eq('contact', contact).maybeSingle();
     if (!lead) {
       const { data: newLead } = await supabase.from('leads').insert({
@@ -954,7 +1218,7 @@ app.post('/api/widget/chat', async (req, res) => {
     }
 
     // Check if bot is paused for this lead
-    if (lead.bot_paused) {
+    if (lead?.bot_paused) {
       return res.json({
         reply: "Our team has taken over this conversation and will respond shortly!",
         score: lead.score,
@@ -963,30 +1227,80 @@ app.post('/api/widget/chat', async (req, res) => {
       });
     }
 
-    const { replyText, score, isHandoffReady, bookingTriggered } = await generateAIResponse({
+    // Conversation history preparation
+    let fullHistory = conversationHistory || [];
+    if (!fullHistory || fullHistory.length === 0) {
+      // Fetch from DB messages if exists
+      const { data: dbMessages } = await supabase
+        .from('messages')
+        .select('sender, content')
+        .eq('lead_id', lead?.id)
+        .order('created_at', { ascending: true })
+        .limit(15);
+
+      if (dbMessages && dbMessages.length > 0) {
+        fullHistory = dbMessages;
+      }
+    }
+
+    const { replyText, score, scoreReason, isHandoffReady, bookingTriggered } = await generateAIResponse({
       provider: activeAI?.provider || 'gemini',
       apiKey: activeAI?.api_key || '',
       model: activeAI?.model || 'gemini-1.5-flash',
       context: {
         companyName,
-        leadName: leadName || 'Visitor',
+        leadName: leadName || lead?.full_name || 'Visitor',
         currentScore: lead?.score || 15,
       },
-      conversationHistory: [],
+      conversationHistory: fullHistory,
       latestMessage: message,
       bookingSettings,
       agent: targetAgent,
     });
 
     const newStatus = score >= (targetAgent?.hot_threshold || 75) ? 'hot' : score >= 45 ? 'warm' : 'qualifying';
+
     if (lead?.id) {
+      // 1. Update Lead score
       await supabase.from('leads').update({
         score,
         status: newStatus,
-        is_handoff_ready: isHandoffReady || false,
+        is_handoff_ready: isHandoffReady || newStatus === 'hot',
         last_contact_at: new Date().toISOString(),
       }).eq('id', lead.id);
 
+      // 2. Insert into qualification_scores table for Lead Detail history tracking
+      await supabase.from('qualification_scores').insert({
+        tenant_id: targetTenantId,
+        lead_id: lead.id,
+        score,
+        score_breakdown: {
+          reason: scoreReason,
+          booking_triggered: bookingTriggered,
+          is_handoff_ready: isHandoffReady,
+        },
+      }).catch((e) => console.warn('Qualification score insert notice:', e.message));
+
+      // 3. Find or create conversation and save messages
+      let { data: conv } = await supabase.from('conversations').select('id').eq('lead_id', lead.id).maybeSingle();
+      if (!conv) {
+        const { data: newConv } = await supabase.from('conversations').insert({
+          tenant_id: targetTenantId,
+          lead_id: lead.id,
+          channel: 'website',
+          channel_thread_id: conversationId || contact,
+        }).select().single();
+        conv = newConv;
+      }
+
+      if (conv?.id) {
+        await supabase.from('messages').insert([
+          { tenant_id: targetTenantId, conversation_id: conv.id, lead_id: lead.id, sender: 'lead', content: message, channel: 'website' },
+          { tenant_id: targetTenantId, conversation_id: conv.id, lead_id: lead.id, sender: 'ai', content: replyText, channel: 'website' },
+        ]).catch(() => null);
+      }
+
+      // 4. Trigger Handoff if qualified
       if (newStatus === 'hot' || isHandoffReady) {
         await triggerHumanHandoff({
           tenantId: targetTenantId,
@@ -999,6 +1313,7 @@ app.post('/api/widget/chat', async (req, res) => {
     res.json({
       reply: replyText,
       score,
+      scoreReason,
       status: newStatus,
       isHandoffReady,
       bookingTriggered,
@@ -1009,239 +1324,6 @@ app.post('/api/widget/chat', async (req, res) => {
     res.status(500).json({ error: 'Failed to process chat message' });
   }
 });
-
-// ─── Embeddable Widget Script (widget.js) ────────────────────────────────────
-app.get('/widget.js', (req, res) => {
-  res.setHeader('Content-Type', 'application/javascript');
-  res.send(`
-(function() {
-  var script = document.currentScript || document.querySelector('script[data-agent]');
-  var agentId = script ? script.getAttribute('data-agent') : '';
-  var host = window.location.origin.includes('localhost') ? 'https://qwalify.online' : window.location.origin;
-  var iframeUrl = host + '/embed/' + (agentId || 'default');
-
-  var container = document.createElement('div');
-  container.id = 'qwalify-chat-root';
-  container.style.position = 'fixed';
-  container.style.bottom = '24px';
-  container.style.right = '24px';
-  container.style.zIndex = '999999';
-  container.style.display = 'flex';
-  container.style.flexDirection = 'column';
-  container.style.alignItems = 'flex-end';
-  container.style.fontFamily = 'system-ui, -apple-system, sans-serif';
-
-  var btn = document.createElement('button');
-  btn.style.width = '60px';
-  btn.style.height = '60px';
-  btn.style.borderRadius = '50%';
-  btn.style.background = 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)';
-  btn.style.boxShadow = '0 10px 25px rgba(124, 58, 237, 0.45)';
-  btn.style.border = 'none';
-  btn.style.cursor = 'pointer';
-  btn.style.display = 'flex';
-  btn.style.alignItems = 'center';
-  btn.style.justifyContent = 'center';
-  btn.style.color = '#ffffff';
-  btn.style.fontSize = '26px';
-  btn.style.transition = 'all 0.25s ease';
-  btn.innerHTML = '⚡';
-
-  var frame = document.createElement('iframe');
-  frame.src = iframeUrl;
-  frame.style.width = '390px';
-  frame.style.height = '600px';
-  frame.style.maxHeight = 'calc(100vh - 120px)';
-  frame.style.maxWidth = 'calc(100vw - 48px)';
-  frame.style.border = 'none';
-  frame.style.borderRadius = '24px';
-  frame.style.boxShadow = '0 25px 50px -12px rgba(0,0,0,0.5), 0 0 0 1px rgba(255,255,255,0.1)';
-  frame.style.marginBottom = '16px';
-  frame.style.display = 'none';
-  frame.style.backgroundColor = '#0b0f19';
-
-  var isOpen = false;
-  btn.onclick = function() {
-    isOpen = !isOpen;
-    if (isOpen) {
-      frame.style.display = 'block';
-      btn.innerHTML = '✕';
-      btn.style.transform = 'scale(0.95)';
-    } else {
-      frame.style.display = 'none';
-      btn.innerHTML = '⚡';
-      btn.style.transform = 'scale(1)';
-    }
-  };
-
-  container.appendChild(frame);
-  container.appendChild(btn);
-  document.body.appendChild(container);
-})();
-  `);
-});
-
-async function generateAIResponse({ provider, apiKey, model, context, conversationHistory, latestMessage, bookingSettings, agent }) {
-  const hotThreshold = agent?.hot_threshold || bookingSettings?.hot_score_threshold || 75;
-  const bookingUrl = agent?.booking_url || bookingSettings?.booking_url || null;
-
-  const toneDesc = {
-    empathetic: 'Warm, caring, reassuring, and patient (ideal for clinics, salons, healthcare).',
-    professional: 'Authoritative, polite, clear, and business-focused (ideal for B2B, real estate).',
-    friendly: 'Enthusiastic, approachable, and helpful (ideal for schools, retail).',
-    casual: 'Modern, vibrant, upbeat, and conversational (ideal for salons, spas).',
-    direct: 'Fast, concise, and straight to the point (ideal for auto, urgent inquiries).',
-  }[agent?.tone || 'friendly'] || 'Polite and helpful.';
-
-  const emojiDesc = {
-    none: 'Do NOT use emojis under any circumstances.',
-    subtle: 'Use at most 1-2 subtle emojis per conversation.',
-    expressive: 'Use friendly, expressive emojis naturally.',
-  }[agent?.emoji_style || 'subtle'] || 'Use subtle emojis.';
-
-  let kbSection = '';
-  if (Array.isArray(agent?.knowledge_base) && agent.knowledge_base.length > 0) {
-    kbSection = `BUSINESS KNOWLEDGE & FAQS (use these to answer customer questions accurately):\n` +
-      agent.knowledge_base.map((k) => `• [${k.category || 'General'}] Q: ${k.question} -> A: ${k.answer}`).join('\n');
-  }
-
-  let qrSection = `YOUR DISCOVERY GOALS (ask one question at a time in natural conversational order):\n`;
-  if (Array.isArray(agent?.qualification_rules) && agent.qualification_rules.length > 0) {
-    qrSection += agent.qualification_rules
-      .map((q, i) => `${i + 1}. ${q.text} (Weight: ${q.weight || 20} pts)`)
-      .join('\n');
-  } else {
-    qrSection += `1. What specific service or need do they have?\n2. What is their target timeline?\n3. What is their rough budget range?`;
-  }
-
-  let customPromptSection = '';
-  if (agent?.custom_system_prompt?.trim()) {
-    customPromptSection = `SPECIAL BUSINESS INSTRUCTIONS:\n${agent.custom_system_prompt.trim()}\n`;
-  }
-
-  const systemPrompt = `You are "${agent?.name || 'Qwalify AI'}", an elite qualification assistant for "${context.companyName}" (${agent?.industry || 'business'} industry).
-You are chatting with a prospect on WhatsApp.
-
-TONE & STYLE:
-- Tone: ${toneDesc}
-- Emojis: ${emojiDesc}
-- Length: STRICTLY 1-2 sentences max. Keep replies punchy, natural, and conversational like a real human texting on WhatsApp.
-- Ask only ONE question at a time. Never overwhelm the prospect.
-
-${kbSection ? kbSection + '\n\n' : ''}${qrSection}
-
-${customPromptSection}LEAD INFO: ${context.leadName} | Current score: ${context.currentScore}/100 | Hot threshold: ${hotThreshold}
-
-BOOKING RULES:
-- Propose the booking link when the prospect has answered key qualification questions AND score reaches/approaches ${hotThreshold}.
-- If the prospect explicitly asks to schedule/book an appointment, OR if score is ≥ ${hotThreshold}, send the booking link: ${bookingUrl || '(no booking link configured)'}
-- Booking message format: "Great, let's get that scheduled! Here's the booking link: <link> — pick any slot that works for you 📅"
-
-STRICT RULES:
-- NEVER output headers, bullet lists, or markdown — plain text only.
-- NEVER say "I am an AI".
-- At the very end of your ENTIRE response, append this hidden metadata JSON:
-<qualification_json>
-{"new_score": <0-100>, "score_reason": "<1 sentence>", "is_handoff_ready": <true/false>, "booking_triggered": <true if you included the booking link, false otherwise>}
-</qualification_json>`;
-
-  const messages = [
-    { role: 'system', content: systemPrompt },
-    ...(conversationHistory || []).slice(-8).map((m) => ({
-      role: m.sender === 'lead' ? 'user' : 'assistant',
-      content: m.content,
-    })),
-    { role: 'user', content: latestMessage },
-  ];
-
-  let rawReply = `Hey ${context.leadName}! 👋 Thanks for reaching out to ${context.companyName}. How can we assist you today?
-<qualification_json>
-{"new_score": 20, "score_reason": "First contact, no information gathered yet.", "is_handoff_ready": false, "booking_triggered": false}
-</qualification_json>`;
-
-  if (provider === 'gemini' && apiKey) {
-    try {
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model || 'gemini-1.5-flash'}:generateContent?key=${apiKey}`;
-      const geminiMessages = messages.filter(m => m.role !== 'system');
-      const r = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          systemInstruction: { parts: [{ text: systemPrompt }] },
-          contents: geminiMessages.map(m => ({
-            role: m.role === 'user' ? 'user' : 'model',
-            parts: [{ text: m.content }],
-          })),
-          generationConfig: { maxOutputTokens: 300, temperature: 0.4 },
-        }),
-      });
-      if (r.ok) {
-        const d = await r.json();
-        rawReply = d.candidates?.[0]?.content?.parts?.[0]?.text || rawReply;
-      } else {
-        console.error('Gemini error:', await r.text());
-      }
-    } catch (e) {
-      console.error('Gemini call error:', e);
-    }
-  } else if (apiKey) {
-    let baseUrl = 'https://api.openai.com/v1/chat/completions';
-    if (provider === 'groq') baseUrl = 'https://api.groq.com/openai/v1/chat/completions';
-    if (provider === 'openrouter') baseUrl = 'https://openrouter.ai/api/v1/chat/completions';
-    if (provider === 'mistral') baseUrl = 'https://api.mistral.ai/v1/chat/completions';
-    if (provider === 'grok') baseUrl = 'https://api.x.ai/v1/chat/completions';
-
-    try {
-      const r = await fetch(baseUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({
-          model: model || (provider === 'groq' ? 'llama-3.3-70b-versatile' : 'gpt-4o-mini'),
-          messages,
-          temperature: 0.4,
-          max_tokens: 300,
-        }),
-      });
-      if (r.ok) {
-        const d = await r.json();
-        rawReply = d.choices?.[0]?.message?.content || rawReply;
-      } else {
-        console.error(`${provider} error:`, await r.text());
-      }
-    } catch (e) {
-      console.error(`${provider} call error:`, e);
-    }
-  }
-
-  const jsonRegex = /<qualification_json>([\s\S]*?)<\/qualification_json>/i;
-  const match = rawReply.match(jsonRegex);
-  let score = context.currentScore || 20;
-  let isHandoffReady = false;
-  let bookingTriggered = false;
-
-  if (match?.[1]) {
-    try {
-      const parsed = JSON.parse(match[1].trim());
-      if (typeof parsed.new_score === 'number') score = Math.min(100, Math.max(0, Math.round(parsed.new_score)));
-      if (typeof parsed.is_handoff_ready === 'boolean') isHandoffReady = parsed.is_handoff_ready;
-      if (typeof parsed.booking_triggered === 'boolean') bookingTriggered = parsed.booking_triggered;
-    } catch (e) {
-      console.warn('Failed to parse qualification JSON:', e);
-    }
-  }
-
-  let replyText = rawReply
-    .replace(jsonRegex, '')
-    .replace(/[*_~`#>]+/g, '')
-    .trim();
-
-  const sentences = replyText.match(/[^.!?]+[.!?](?:\s|$)|[^.!?]+$/g) || [];
-  if (sentences.length > 2) {
-    replyText = sentences.slice(0, 2).join(' ').trim();
-  }
-
-  return { replyText, score, isHandoffReady, bookingTriggered };
-}
 
 // ─── WhatsApp Webhook Handler (With Auto-Pause & Handoff Integration) ──────────
 app.post('/webhook/whatsapp', async (req, res) => {
@@ -1395,16 +1477,16 @@ app.post('/webhook/whatsapp', async (req, res) => {
       const activeAgent = activeAgentRow || tenantData?.settings?.active_agent || (tenantData?.settings?.agents || []).find((a) => a.is_active) || null;
       const activeAI = (aiConfigs || []).find((c) => c.is_active) || (aiConfigs || [])[0];
 
-      // Fetch last 10 messages for context
+      // Fetch last 20 messages for complete conversational context
       const { data: pastMessages } = await supabase
         .from('messages')
         .select('sender, content')
         .eq('conversation_id', conv.id)
         .order('created_at', { ascending: true })
-        .limit(10);
+        .limit(20);
 
       // 5. Execute AI Turn
-      const { replyText, score, isHandoffReady, bookingTriggered } = await generateAIResponse({
+      const { replyText, score, scoreReason, isHandoffReady, bookingTriggered } = await generateAIResponse({
         provider: activeAI?.provider || 'gemini',
         apiKey: activeAI?.api_key || '',
         model: activeAI?.model || 'gemini-1.5-flash',
@@ -1433,6 +1515,19 @@ app.post('/webhook/whatsapp', async (req, res) => {
           last_contact_at: new Date().toISOString(),
         })
         .eq('id', lead.id);
+
+      // Record in qualification_scores for Lead Detail score tracking
+      await supabase.from('qualification_scores').insert({
+        tenant_id: tenantId,
+        lead_id: lead.id,
+        score,
+        score_breakdown: {
+          reason: scoreReason,
+          booking_triggered: bookingTriggered,
+          is_handoff_ready: isHandoffReady,
+          channel: 'whatsapp',
+        },
+      }).catch(() => null);
 
       // Insert AI reply message
       await supabase.from('messages').insert({
