@@ -1183,10 +1183,21 @@ app.post('/api/widget/chat', async (req, res) => {
     }
 
     if (!targetTenantId) {
-      const { data: firstTenant } = await supabase.from('tenants').select('id, name, settings').limit(1).maybeSingle();
-      targetTenantId = firstTenant?.id;
-      if (!targetAgent) {
-        targetAgent = firstTenant?.settings?.active_agent || (firstTenant?.settings?.agents || []).find((a) => a.is_active);
+      // Prefer tenant with live configured AI provider
+      const { data: validAI } = await supabase
+        .from('ai_provider_configs')
+        .select('tenant_id')
+        .not('api_key', 'is', null)
+        .neq('api_key', 'demo_key_placeholder')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (validAI?.tenant_id) {
+        targetTenantId = validAI.tenant_id;
+      } else {
+        const { data: firstTenant } = await supabase.from('tenants').select('id, name, settings').limit(1).maybeSingle();
+        targetTenantId = firstTenant?.id;
       }
     }
 
@@ -1196,7 +1207,23 @@ app.post('/api/widget/chat', async (req, res) => {
       supabase.from('tenants').select('id, name, settings').eq('id', targetTenantId).maybeSingle(),
     ]);
 
-    const activeAI = (aiConfigs || []).find((c) => c.is_active) || (aiConfigs || [])[0];
+    let activeAI = (aiConfigs || []).find((c) => c.is_active && c.api_key && !c.api_key.includes('demo') && !c.api_key.includes('placeholder')) || (aiConfigs || [])[0];
+
+    // Global AI key fallback if tenant's key is placeholder
+    if (!activeAI?.api_key || activeAI.api_key.includes('placeholder') || activeAI.api_key.includes('demo')) {
+      const { data: fallbackAIs } = await supabase
+        .from('ai_provider_configs')
+        .select('*')
+        .not('api_key', 'is', null)
+        .neq('api_key', 'demo_key_placeholder')
+        .order('created_at', { ascending: false })
+        .limit(1);
+
+      if (fallbackAIs && fallbackAIs.length > 0) {
+        activeAI = fallbackAIs[0];
+      }
+    }
+
     const companyName = tenantData?.name || 'Our Company';
     if (!targetAgent) {
       targetAgent = tenantData?.settings?.active_agent || (tenantData?.settings?.agents || []).find((a) => a.is_active);
