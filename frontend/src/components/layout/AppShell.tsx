@@ -15,21 +15,95 @@ import {
   X,
   Bot,
   Search,
+  Smile,
+  BookOpen,
+  Repeat2,
+  Radio,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { cn } from '@/lib/utils';
 
-export const NAV_ITEMS = [
+// Top-level nav items
+const TOP_NAV = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/agents', label: 'AI Workers', icon: Bot },
   { path: '/leads', label: 'Leads', icon: Users },
   { path: '/bookings', label: 'Appointments', icon: Calendar },
+];
+
+// Your Bot sub-pages
+const BOT_NAV = [
+  { path: '/bot/personality', label: 'Personality & Tone', icon: Smile },
+  { path: '/bot/knowledge', label: 'Knowledge Base', icon: BookOpen },
+  { path: '/bot/followup', label: 'Follow-up Rules', icon: Repeat2 },
+  { path: '/bot/channels', label: 'Channels', icon: Radio },
+];
+
+// Bottom nav
+const BOTTOM_NAV = [
   { path: '/settings', label: 'Settings', icon: Settings },
 ];
 
-export function Sidebar() {
+// Flat list used by mobile drawer and mobile bottom bar
+export const NAV_ITEMS = [...TOP_NAV, ...BOT_NAV, ...BOTTOM_NAV];
+
+function NavLink({
+  path,
+  label,
+  icon: Icon,
+  collapsed,
+  onClick,
+}: {
+  path: string;
+  label: string;
+  icon: React.ElementType;
+  collapsed: boolean;
+  onClick?: () => void;
+}) {
   const location = useLocation();
+  const active = location.pathname.startsWith(path);
+  return (
+    <Link
+      to={path}
+      onClick={onClick}
+      className={cn(
+        'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 group relative',
+        active
+          ? 'bg-violet-600/15 text-violet-400 border border-violet-500/20'
+          : 'text-slate-500 hover:text-slate-200 hover:bg-navy-700/60'
+      )}
+    >
+      {active && (
+        <motion.div
+          layoutId="activeNav"
+          className="absolute inset-0 rounded-lg bg-violet-600/10 border border-violet-500/20"
+          transition={{ duration: 0.2 }}
+        />
+      )}
+      <Icon className={cn('w-5 h-5 flex-shrink-0 relative z-10', active ? 'text-violet-400' : '')} />
+      <AnimatePresence>
+        {!collapsed && (
+          <motion.span
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="relative z-10 whitespace-nowrap"
+          >
+            {label}
+          </motion.span>
+        )}
+      </AnimatePresence>
+      {collapsed && (
+        <div className="absolute left-full ml-3 px-2 py-1 bg-navy-800 border border-navy-600 rounded-md text-xs text-slate-200 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+          {label}
+        </div>
+      )}
+    </Link>
+  );
+}
+
+export function Sidebar() {
   const { collapsed, toggle } = {
     collapsed: useUIStore((s) => s.sidebarCollapsed),
     toggle: useUIStore((s) => s.toggleSidebar),
@@ -87,48 +161,40 @@ export function Sidebar() {
       </AnimatePresence>
 
       {/* Nav */}
-      <nav className="flex-1 px-2 py-4 space-y-1 overflow-y-auto">
-        {NAV_ITEMS.map(({ path, label, icon: Icon }) => {
-          const active = location.pathname.startsWith(path);
-          return (
-            <Link
-              key={path}
-              to={path}
-              className={cn(
-                'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200 group relative',
-                active
-                  ? 'bg-violet-600/15 text-violet-400 border border-violet-500/20'
-                  : 'text-slate-500 hover:text-slate-200 hover:bg-navy-700/60'
-              )}
-            >
-              {active && (
-                <motion.div
-                  layoutId="activeNav"
-                  className="absolute inset-0 rounded-lg bg-violet-600/10 border border-violet-500/20"
-                  transition={{ duration: 0.2 }}
-                />
-              )}
-              <Icon className={cn('w-5 h-5 flex-shrink-0 relative z-10', active ? 'text-violet-400' : '')} />
-              <AnimatePresence>
-                {!collapsed && (
-                  <motion.span
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    exit={{ opacity: 0 }}
-                    className="relative z-10 whitespace-nowrap"
-                  >
-                    {label}
-                  </motion.span>
-                )}
-              </AnimatePresence>
-              {collapsed && (
-                <div className="absolute left-full ml-3 px-2 py-1 bg-navy-800 border border-navy-600 rounded-md text-xs text-slate-200 whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-                  {label}
-                </div>
-              )}
-            </Link>
-          );
-        })}
+      <nav className="flex-1 px-2 py-4 overflow-y-auto space-y-1">
+        {/* Top nav */}
+        {TOP_NAV.map((item) => (
+          <NavLink key={item.path} {...item} collapsed={collapsed} />
+        ))}
+
+        {/* YOUR BOT section */}
+        <div className="pt-4 pb-1">
+          <AnimatePresence>
+            {!collapsed && (
+              <motion.p
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="px-3 text-[10px] font-semibold text-slate-600 uppercase tracking-widest mb-1"
+              >
+                Your Bot
+              </motion.p>
+            )}
+          </AnimatePresence>
+          {collapsed && (
+            <div className="border-t border-navy-700/60 mb-2 mx-1" />
+          )}
+          {BOT_NAV.map((item) => (
+            <NavLink key={item.path} {...item} collapsed={collapsed} />
+          ))}
+        </div>
+
+        {/* Bottom nav */}
+        <div className="pt-2 border-t border-navy-700/40">
+          {BOTTOM_NAV.map((item) => (
+            <NavLink key={item.path} {...item} collapsed={collapsed} />
+          ))}
+        </div>
       </nav>
 
       {/* User */}
@@ -194,7 +260,10 @@ export function Navbar() {
     '/leads': 'Leads',
     '/bookings': 'Appointments',
     '/settings': 'Settings',
-    '/features': 'Features & Guide',
+    '/bot/personality': 'Personality & Tone',
+    '/bot/knowledge': 'Knowledge Base',
+    '/bot/followup': 'Follow-up Rules',
+    '/bot/channels': 'Channels',
   };
 
   const title =
@@ -302,7 +371,7 @@ export function Navbar() {
 
                 {/* Nav Links */}
                 <nav className="py-4 space-y-1">
-                  {NAV_ITEMS.map(({ path, label, icon: Icon }) => {
+                  {TOP_NAV.map(({ path, label, icon: Icon }) => {
                     const active = location.pathname.startsWith(path);
                     return (
                       <Link
@@ -321,6 +390,53 @@ export function Navbar() {
                       </Link>
                     );
                   })}
+
+                  {/* Your Bot section */}
+                  <div className="pt-3">
+                    <p className="px-3 text-[10px] font-semibold text-slate-600 uppercase tracking-widest mb-1">Your Bot</p>
+                    {BOT_NAV.map(({ path, label, icon: Icon }) => {
+                      const active = location.pathname.startsWith(path);
+                      return (
+                        <Link
+                          key={path}
+                          to={path}
+                          onClick={() => setMobileDrawerOpen(false)}
+                          className={cn(
+                            'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors',
+                            active
+                              ? 'bg-violet-600/20 text-violet-300 border border-violet-500/30'
+                              : 'text-slate-400 hover:text-slate-200 hover:bg-navy-800/60'
+                          )}
+                        >
+                          <Icon className="w-4 h-4" />
+                          {label}
+                        </Link>
+                      );
+                    })}
+                  </div>
+
+                  {/* Settings */}
+                  <div className="pt-2 border-t border-navy-800">
+                    {BOTTOM_NAV.map(({ path, label, icon: Icon }) => {
+                      const active = location.pathname.startsWith(path);
+                      return (
+                        <Link
+                          key={path}
+                          to={path}
+                          onClick={() => setMobileDrawerOpen(false)}
+                          className={cn(
+                            'flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-colors',
+                            active
+                              ? 'bg-violet-600/20 text-violet-300 border border-violet-500/30'
+                              : 'text-slate-400 hover:text-slate-200 hover:bg-navy-800/60'
+                          )}
+                        >
+                          <Icon className="w-4 h-4" />
+                          {label}
+                        </Link>
+                      );
+                    })}
+                  </div>
                 </nav>
               </div>
 
@@ -361,7 +477,7 @@ export function MobileBottomNav() {
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/agents', label: 'Workers', icon: Bot },
     { path: '/leads', label: 'Leads', icon: Users },
-    { path: '/bookings', label: 'Bookings', icon: Calendar },
+    { path: '/bot/channels', label: 'Channels', icon: Radio },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];
 

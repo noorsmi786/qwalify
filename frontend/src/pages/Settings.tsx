@@ -1,31 +1,29 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
-  MessageSquare,
   Sparkles,
   Building2,
   Calendar,
   ChevronRight,
   Webhook,
+  Bot,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { AIProvidersTab } from '@/components/settings/AIProvidersTab';
-import { ChannelsTab } from '@/components/settings/ChannelsTab';
 import { BookingSettingsTab } from '@/components/settings/BookingSettingsTab';
 import { TeamWorkspaceTab } from '@/components/settings/TeamWorkspaceTab';
 import { IntegrationsTab } from '@/components/settings/IntegrationsTab';
 
-type Tab = 'channels' | 'ai' | 'booking' | 'integrations' | 'workspace';
+type Tab = 'ai' | 'booking' | 'integrations' | 'workspace';
 
 export default function SettingsPage() {
-  const [activeTab, setActiveTab] = useState<Tab>('channels');
+  const [activeTab, setActiveTab] = useState<Tab>('workspace');
 
   const TABS: { id: Tab; label: string; icon: React.ReactNode; badge?: string }[] = [
-    { id: 'channels', label: 'WhatsApp & Phone', icon: <MessageSquare className="w-4 h-4" />, badge: 'Live' },
+    { id: 'workspace', label: 'Account & Profile', icon: <Building2 className="w-4 h-4" /> },
     { id: 'ai', label: 'AI Model & Keys', icon: <Sparkles className="w-4 h-4" />, badge: 'BYO-API' },
     { id: 'booking', label: 'Booking & Calendar', icon: <Calendar className="w-4 h-4" /> },
     { id: 'integrations', label: 'Website Widget & Webhooks', icon: <Webhook className="w-4 h-4" /> },
-    { id: 'workspace', label: 'Workspace & Profile', icon: <Building2 className="w-4 h-4" /> },
   ];
 
   return (
@@ -34,8 +32,27 @@ export default function SettingsPage() {
       <div>
         <h1 className="text-2xl font-bold text-slate-100">Settings</h1>
         <p className="text-sm text-slate-400 mt-0.5">
-          Configure your WhatsApp connection, AI models, booking links, and website widgets.
+          Manage your account, API keys, booking links, and website widgets.
         </p>
+      </div>
+
+      {/* Bot settings shortcut banner */}
+      <div className="p-4 rounded-xl bg-violet-500/5 border border-violet-500/20 flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-9 h-9 rounded-xl bg-violet-600/20 flex items-center justify-center flex-shrink-0">
+            <Bot className="w-5 h-5 text-violet-400" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-slate-200">Looking for bot settings?</p>
+            <p className="text-xs text-slate-400">Personality, Knowledge Base, Follow-up Rules, and Channels are in the "Your Bot" section.</p>
+          </div>
+        </div>
+        <Link
+          to="/bot/personality"
+          className="flex-shrink-0 flex items-center gap-1.5 px-4 py-2 rounded-lg bg-violet-600/15 hover:bg-violet-600/25 text-violet-300 text-xs font-semibold border border-violet-500/30 transition-all"
+        >
+          Go to Your Bot <ChevronRight className="w-3.5 h-3.5" />
+        </Link>
       </div>
 
       <div className="flex flex-col md:flex-row gap-6">
@@ -83,7 +100,6 @@ export default function SettingsPage() {
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.18 }}
           >
-            {activeTab === 'channels' && <ChannelsTab />}
             {activeTab === 'ai' && <AIProvidersTab />}
             {activeTab === 'booking' && <BookingSettingsTab />}
             {activeTab === 'integrations' && <IntegrationsTab />}

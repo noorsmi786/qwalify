@@ -11,6 +11,10 @@ import OnboardingPage from '@/pages/Onboarding';
 import FeaturesGuidePage from '@/pages/FeaturesGuide';
 import AgentsStudio from '@/pages/AgentsStudio';
 import EmbedChat from '@/pages/EmbedChat';
+import BotPersonalityPage from '@/pages/bot/Personality';
+import BotKnowledgePage from '@/pages/bot/Knowledge';
+import BotFollowupPage from '@/pages/bot/Followup';
+import BotChannelsPage from '@/pages/bot/Channels';
 
 export default function App() {
   return (
@@ -42,6 +46,11 @@ export default function App() {
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/features" element={<FeaturesGuidePage />} />
           <Route path="/guide" element={<FeaturesGuidePage />} />
+          {/* Your Bot pages */}
+          <Route path="/bot/personality" element={<BotPersonalityPage />} />
+          <Route path="/bot/knowledge" element={<BotKnowledgePage />} />
+          <Route path="/bot/followup" element={<BotFollowupPage />} />
+          <Route path="/bot/channels" element={<BotChannelsPage />} />
         </Route>
 
         {/* Catch all */}
@@ -50,4 +59,3 @@ export default function App() {
     </BrowserRouter>
   );
 }
-
