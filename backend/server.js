@@ -49,6 +49,172 @@ app.get('/api/health', (req, res) => {
   res.json({ status: 'ok', service: 'qwalify-webhook-engine', timestamp: new Date().toISOString() });
 });
 
+// ─── Outbound Webhook Dispatcher ──────────────────────────────────────────────
+async function dispatchOutboundWebhook(tenantId, eventName, payload) {
+  try {
+    const { data: tenant } = await supabase.from('tenants').select('settings').eq('id', tenantId).maybeSingle();
+    const webhookUrl = tenant?.settings?.outbound_webhook_url;
+    if (webhookUrl && (webhookUrl.startsWith('http://') || webhookUrl.startsWith('https://'))) {
+      await fetch(webhookUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'User-Agent': 'Qwalify-Outbound-Engine/1.0' },
+        body: JSON.stringify({
+          event: eventName,
+          data: payload,
+          timestamp: new Date().toISOString(),
+        }),
+      });
+      console.log(`[Webhook] Dispatched ${eventName} to ${webhookUrl}`);
+    }
+  } catch (err) {
+    console.warn('[Webhook Error]:', err.message);
+  }
+}
+
+// ─── Telegram Dispatcher for Rep Notifications ────────────────────────────────
+async function sendTelegramAlert({ token, chatId, text }) {
+  if (!token || !chatId || !text) {
+    console.warn('[Telegram Alert Skipped] Missing token or chatId');
+    return false;
+  }
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text,
+        parse_mode: 'HTML',
+      }),
+    });
+    const data = await res.json();
+    if (data?.ok) {
+      console.log(`[Telegram Alert Sent] to Chat ID: ${chatId}`);
+      return true;
+    } else {
+      console.warn('[Telegram Alert API Error]:', data?.description);
+      return false;
+    }
+  } catch (err) {
+    console.error('[Telegram Alert Exception]:', err.message);
+    return false;
+  }
+}
+
+// ─── Get Tenant Rep Settings (Telegram) ───────────────────────────────────────
+async function getTenantRepSettings(tenantId) {
+  try {
+    // 1. Check rep_settings table if exists
+    const { data: repRow } = await supabase
+      .from('rep_settings')
+      .select('*')
+      .eq('tenant_id', tenantId)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    if (repRow?.notification_handle) {
+      return {
+        channel: repRow.notification_channel || 'telegram',
+        handle: repRow.notification_handle,
+        botToken: repRow.bot_token || process.env.TELEGRAM_BOT_TOKEN,
+      };
+    }
+
+    // 2. Check channel_connections for Telegram
+    const { data: tgConn } = await supabase
+      .from('channel_connections')
+      .select('config')
+      .eq('tenant_id', tenantId)
+      .eq('channel', 'telegram')
+      .maybeSingle();
+
+    // 3. Check tenant settings
+    const { data: tenant } = await supabase
+      .from('tenants')
+      .select('settings')
+      .eq('id', tenantId)
+      .maybeSingle();
+
+    const handle = tenant?.settings?.rep_telegram_chat_id || process.env.REP_TELEGRAM_CHAT_ID;
+    const botToken = tgConn?.config?.bot_token || tenant?.settings?.telegram_bot_token || process.env.TELEGRAM_BOT_TOKEN;
+
+    return {
+      channel: 'telegram',
+      handle,
+      botToken,
+    };
+  } catch {
+    return {
+      channel: 'telegram',
+      handle: process.env.REP_TELEGRAM_CHAT_ID,
+      botToken: process.env.TELEGRAM_BOT_TOKEN,
+    };
+  }
+}
+
+// ─── Trigger Human Handoff Core Logic ─────────────────────────────────────────
+async function triggerHumanHandoff({ tenantId, lead, reason = 'auto_hot_score', repId = null, conversationId = null }) {
+  try {
+    console.log(`[Human Handoff] Triggered for lead ${lead.full_name} (${lead.id}), reason: ${reason}`);
+
+    // 1. Pause bot on lead and conversation
+    await supabase.from('leads').update({
+      bot_paused: true,
+      is_handoff_ready: true,
+      last_contact_at: new Date().toISOString(),
+    }).eq('id', lead.id);
+
+    if (conversationId) {
+      await supabase.from('conversations').update({ state: 'paused' }).eq('id', conversationId);
+    } else {
+      await supabase.from('conversations').update({ state: 'paused' }).eq('lead_id', lead.id);
+    }
+
+    // 2. Generate summary
+    const summary = `${lead.full_name} inquiry on ${lead.source_channel || 'WhatsApp'} (Score: ${lead.score || 75}/100) — Hot Lead handed off to human rep.`;
+
+    // 3. Create handoff_events record
+    await supabase.from('handoff_events').insert({
+      tenant_id: tenantId,
+      lead_id: lead.id,
+      conversation_id: conversationId || undefined,
+      reason,
+      status: 'pending',
+      assigned_rep_id: repId,
+      trigger_score: lead.score || 75,
+      summary,
+      notes: JSON.stringify({ summary, auto_paused: true, source: lead.source_channel }),
+    }).catch((e) => console.warn('[Handoff Event Insert Warn]:', e.message));
+
+    // 4. Dispatch Telegram alert to rep
+    const repSettings = await getTenantRepSettings(tenantId);
+    if (repSettings?.handle && repSettings?.botToken) {
+      const dashboardLink = `https://qwalify.online/leads/${lead.id}`;
+      const alertText = `🔥 <b>Hot Lead Alert: ${lead.full_name}</b> (${lead.source_channel || 'WhatsApp'})
+<b>Score:</b> ${lead.score || 75}/100
+<b>Summary:</b> ${summary}
+
+👉 <b>Reply to this message</b> to text the lead directly, or <a href="${dashboardLink}">open dashboard</a>.
+To resume AI bot, send <code>/resolve</code>`;
+
+      await sendTelegramAlert({
+        token: repSettings.botToken,
+        chatId: repSettings.handle,
+        text: alertText,
+      });
+    }
+
+    // 5. Fire outbound webhook
+    await dispatchOutboundWebhook(tenantId, 'lead.handoff', {
+      leadId: lead.id,
+      leadName: lead.full_name,
+      reason,
+      score: lead.score,
+    });
+  } catch (err) {
+    console.error('[Human Handoff Error]:', err);
+  }
+}
 
 // ─── Feedback Endpoint ─────────────────────────────────────────────────────────
 app.post('/api/feedback', async (req, res) => {
@@ -92,27 +258,142 @@ app.post('/api/feedback', async (req, res) => {
   }
 });
 
-// ─── Outbound Webhook Dispatcher ──────────────────────────────────────────────
-async function dispatchOutboundWebhook(tenantId, eventName, payload) {
+// ─── Human Handoff API Endpoints ──────────────────────────────────────────────
+app.post('/api/handoff/trigger', async (req, res) => {
   try {
-    const { data: tenant } = await supabase.from('tenants').select('settings').eq('id', tenantId).maybeSingle();
-    const webhookUrl = tenant?.settings?.outbound_webhook_url;
-    if (webhookUrl && (webhookUrl.startsWith('http://') || webhookUrl.startsWith('https://'))) {
-      await fetch(webhookUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'User-Agent': 'Qwalify-Outbound-Engine/1.0' },
-        body: JSON.stringify({
-          event: eventName,
-          data: payload,
-          timestamp: new Date().toISOString(),
-        }),
-      });
-      console.log(`[Webhook] Dispatched ${eventName} to ${webhookUrl}`);
-    }
+    const { leadId, tenantId, reason, repId } = req.body;
+    if (!leadId) return res.status(400).json({ error: 'leadId is required' });
+
+    const { data: lead } = await supabase.from('leads').select('*').eq('id', leadId).maybeSingle();
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const targetTenantId = tenantId || lead.tenant_id;
+    await triggerHumanHandoff({
+      tenantId: targetTenantId,
+      lead,
+      reason: reason || 'manual_flag',
+      repId,
+    });
+
+    res.json({ success: true, status: 'handoff_triggered', bot_paused: true });
   } catch (err) {
-    console.warn('[Webhook Error]:', err.message);
+    console.error('[Handoff Trigger API Error]:', err);
+    res.status(500).json({ error: err.message || 'Failed to trigger handoff' });
   }
-}
+});
+
+app.post('/api/handoff/resolve', async (req, res) => {
+  try {
+    const { leadId, tenantId } = req.body;
+    if (!leadId) return res.status(400).json({ error: 'leadId is required' });
+
+    // 1. Resume bot on lead
+    await supabase.from('leads').update({
+      bot_paused: false,
+      is_handoff_ready: false,
+      last_contact_at: new Date().toISOString(),
+    }).eq('id', leadId);
+
+    // 2. Resume conversation
+    await supabase.from('conversations').update({ state: 'active' }).eq('lead_id', leadId);
+
+    // 3. Mark handoff_event resolved
+    await supabase.from('handoff_events').update({
+      status: 'resolved',
+      resolved_at: new Date().toISOString(),
+    }).eq('lead_id', leadId).eq('status', 'pending');
+
+    console.log(`[Human Handoff Resolved] Lead ${leadId}, bot resumed.`);
+    res.json({ success: true, status: 'resolved', bot_paused: false });
+  } catch (err) {
+    console.error('[Handoff Resolve API Error]:', err);
+    res.status(500).json({ error: err.message || 'Failed to resolve handoff' });
+  }
+});
+
+// ─── Manual Reply Endpoint (Human Takeover) ───────────────────────────────────
+app.post('/api/leads/reply', async (req, res) => {
+  try {
+    const { leadId, tenantId, message, repName } = req.body;
+    if (!leadId || !message?.trim()) {
+      return res.status(400).json({ error: 'leadId and message are required' });
+    }
+
+    console.log(`[Manual Reply] For lead ${leadId} by ${repName || 'Rep'}: "${message}"`);
+
+    // 1. Fetch Lead
+    const { data: lead } = await supabase.from('leads').select('*').eq('id', leadId).maybeSingle();
+    if (!lead) return res.status(404).json({ error: 'Lead not found' });
+
+    const targetTenantId = tenantId || lead.tenant_id;
+
+    // 2. Pause AI bot for this lead
+    await supabase.from('leads').update({
+      bot_paused: true,
+      is_handoff_ready: true,
+      last_contact_at: new Date().toISOString(),
+    }).eq('id', lead.id);
+
+    // 3. Find or Create conversation
+    let { data: conv } = await supabase.from('conversations').select('id, channel_thread_id').eq('lead_id', leadId).maybeSingle();
+    if (!conv) {
+      const { data: newConv } = await supabase.from('conversations').insert({
+        tenant_id: targetTenantId,
+        lead_id: lead.id,
+        channel: lead.source_channel || 'whatsapp',
+        state: 'paused',
+      }).select().single();
+      conv = newConv;
+    } else {
+      await supabase.from('conversations').update({ state: 'paused' }).eq('id', conv.id);
+    }
+
+    // 4. Save message with sender = 'human'
+    await supabase.from('messages').insert({
+      tenant_id: targetTenantId,
+      conversation_id: conv.id,
+      lead_id: lead.id,
+      sender: 'human',
+      content: message,
+      channel: lead.source_channel || 'whatsapp',
+    });
+
+    // 5. Send message to WhatsApp via Evolution API
+    if (lead.source_channel === 'whatsapp' && lead.contact) {
+      const { data: conn } = await supabase
+        .from('channel_connections')
+        .select('config')
+        .eq('tenant_id', targetTenantId)
+        .eq('channel', 'whatsapp')
+        .maybeSingle();
+
+      const instanceName = conn?.config?.instance_name || 'qwalify-main';
+      const cleanPhone = lead.contact.replace(/\D/g, '');
+
+      try {
+        const evoRes = await fetch(`${EVOLUTION_URL}/message/sendText/${instanceName}`, {
+          method: 'POST',
+          headers: {
+            apikey: EVOLUTION_API_KEY,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            number: cleanPhone,
+            text: message,
+          }),
+        });
+        console.log(`[Manual Reply Dispatched to WhatsApp] Status: ${evoRes.status}`);
+      } catch (evoErr) {
+        console.warn('[Manual Reply Evolution Error]:', evoErr.message);
+      }
+    }
+
+    res.json({ success: true, status: 'sent', bot_paused: true });
+  } catch (err) {
+    console.error('[Manual Reply Error]:', err);
+    res.status(500).json({ error: err.message || 'Failed to send manual reply' });
+  }
+});
 
 // ─── Instant Website Brain Scanner ───────────────────────────────────────────
 app.post('/api/scrape-knowledge', async (req, res) => {
@@ -141,7 +422,6 @@ app.post('/api/scrape-knowledge', async (req, res) => {
 
     const html = await response.text();
 
-    // Clean HTML to extract text content
     const cleanedText = html
       .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, ' ')
       .replace(/<style\b[^<]*(?:(?!<\/style>)<[^<]*)*<\/style>/gi, ' ')
@@ -153,7 +433,6 @@ app.post('/api/scrape-knowledge', async (req, res) => {
       .trim()
       .slice(0, 10000);
 
-    // Get active AI config for tenant
     let aiConfig = null;
     if (tenantId) {
       const { data: configs } = await supabase.from('ai_provider_configs').select('*').eq('tenant_id', tenantId);
@@ -396,6 +675,16 @@ app.post('/api/widget/chat', async (req, res) => {
       lead = newLead;
     }
 
+    // Check if bot is paused for this lead
+    if (lead.bot_paused) {
+      return res.json({
+        reply: "Our team has taken over this conversation and will respond shortly!",
+        score: lead.score,
+        status: lead.status,
+        bot_paused: true,
+      });
+    }
+
     const { replyText, score, isHandoffReady, bookingTriggered } = await generateAIResponse({
       provider: activeAI?.provider || 'gemini',
       apiKey: activeAI?.api_key || '',
@@ -421,10 +710,10 @@ app.post('/api/widget/chat', async (req, res) => {
       }).eq('id', lead.id);
 
       if (newStatus === 'hot' || isHandoffReady) {
-        await dispatchOutboundWebhook(targetTenantId, 'lead.hot', {
+        await triggerHumanHandoff({
+          tenantId: targetTenantId,
           lead: { ...lead, score, status: newStatus },
-          agent: targetAgent?.name,
-          source: 'website_widget',
+          reason: 'auto_hot_score',
         });
       }
     }
@@ -514,13 +803,10 @@ app.get('/widget.js', (req, res) => {
   `);
 });
 
-
-
 async function generateAIResponse({ provider, apiKey, model, context, conversationHistory, latestMessage, bookingSettings, agent }) {
   const hotThreshold = agent?.hot_threshold || bookingSettings?.hot_score_threshold || 75;
   const bookingUrl = agent?.booking_url || bookingSettings?.booking_url || null;
 
-  // Build Tone & Persona Instructions
   const toneDesc = {
     empathetic: 'Warm, caring, reassuring, and patient (ideal for clinics, salons, healthcare).',
     professional: 'Authoritative, polite, clear, and business-focused (ideal for B2B, real estate).',
@@ -535,14 +821,12 @@ async function generateAIResponse({ provider, apiKey, model, context, conversati
     expressive: 'Use friendly, expressive emojis naturally.',
   }[agent?.emoji_style || 'subtle'] || 'Use subtle emojis.';
 
-  // Build Knowledge Base Section
   let kbSection = '';
   if (Array.isArray(agent?.knowledge_base) && agent.knowledge_base.length > 0) {
     kbSection = `BUSINESS KNOWLEDGE & FAQS (use these to answer customer questions accurately):\n` +
       agent.knowledge_base.map((k) => `• [${k.category || 'General'}] Q: ${k.question} -> A: ${k.answer}`).join('\n');
   }
 
-  // Build Qualification Rules Section
   let qrSection = `YOUR DISCOVERY GOALS (ask one question at a time in natural conversational order):\n`;
   if (Array.isArray(agent?.qualification_rules) && agent.qualification_rules.length > 0) {
     qrSection += agent.qualification_rules
@@ -651,7 +935,6 @@ STRICT RULES:
     }
   }
 
-  // Parse qualification metadata
   const jsonRegex = /<qualification_json>([\s\S]*?)<\/qualification_json>/i;
   const match = rawReply.match(jsonRegex);
   let score = context.currentScore || 20;
@@ -669,13 +952,11 @@ STRICT RULES:
     }
   }
 
-  // Clean reply: strip JSON metadata + any markdown leftovers
   let replyText = rawReply
     .replace(jsonRegex, '')
     .replace(/[*_~`#>]+/g, '')
     .trim();
 
-  // Hard-cap to 2 sentences to keep WhatsApp replies punchy
   const sentences = replyText.match(/[^.!?]+[.!?](?:\s|$)|[^.!?]+$/g) || [];
   if (sentences.length > 2) {
     replyText = sentences.slice(0, 2).join(' ').trim();
@@ -684,8 +965,7 @@ STRICT RULES:
   return { replyText, score, isHandoffReady, bookingTriggered };
 }
 
-
-// ─── WhatsApp Webhook Handler ──────────────────────────────────────────────────
+// ─── WhatsApp Webhook Handler (With Auto-Pause & Handoff Integration) ──────────
 app.post('/webhook/whatsapp', async (req, res) => {
   try {
     const body = req.body;
@@ -710,7 +990,6 @@ app.post('/webhook/whatsapp', async (req, res) => {
       let tenantId = null;
       let tenantName = 'Qwalify Workspace';
 
-      // Check channel_connections
       const { data: conn } = await supabase
         .from('channel_connections')
         .select('tenant_id')
@@ -721,7 +1000,6 @@ app.post('/webhook/whatsapp', async (req, res) => {
       if (conn?.tenant_id) {
         tenantId = conn.tenant_id;
       } else {
-        // Match by slug if instance is tenant-<slug>
         const slug = instanceName.replace('tenant-', '');
         const { data: tenant } = await supabase
           .from('tenants')
@@ -733,7 +1011,6 @@ app.post('/webhook/whatsapp', async (req, res) => {
           tenantId = tenant.id;
           tenantName = tenant.name;
         } else {
-          // Default to first tenant
           const { data: firstTenant } = await supabase.from('tenants').select('id, name').limit(1).maybeSingle();
           if (firstTenant) {
             tenantId = firstTenant.id;
@@ -750,7 +1027,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       // 2. Upsert Lead
       let { data: lead } = await supabase
         .from('leads')
-        .select('id, full_name, status, score')
+        .select('*')
         .eq('tenant_id', tenantId)
         .eq('contact', senderPhone)
         .maybeSingle();
@@ -780,7 +1057,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       // 3. Upsert Conversation & Save Inbound Message
       let { data: conv } = await supabase
         .from('conversations')
-        .select('id')
+        .select('*')
         .eq('tenant_id', tenantId)
         .eq('lead_id', lead.id)
         .eq('channel', 'whatsapp')
@@ -810,6 +1087,25 @@ app.post('/webhook/whatsapp', async (req, res) => {
         channel: 'whatsapp',
       });
 
+      // ─── AUTO-PAUSE CHECK: If bot is paused (human handling), SKIP AI entirely ───
+      const isBotPaused = lead.bot_paused || lead.is_handoff_ready || conv.state === 'paused';
+      if (isBotPaused) {
+        console.log(`[WhatsApp Inbound] Lead ${lead.full_name} (${lead.id}) is in HUMAN HANDOFF (bot_paused=true). Skipping AI reply.`);
+
+        // Forward message to Rep on Telegram
+        const repSettings = await getTenantRepSettings(tenantId);
+        if (repSettings?.handle && repSettings?.botToken) {
+          const forwardText = `💬 <b>[${pushName} on WhatsApp]:</b>\n"${messageText}"\n\n<i>Reply to this message on Telegram to text back, or open dashboard.</i>`;
+          await sendTelegramAlert({
+            token: repSettings.botToken,
+            chatId: repSettings.handle,
+            text: forwardText,
+          });
+        }
+
+        return res.json({ status: 'bot_paused', replied: false, forwarded_to_rep: true });
+      }
+
       // 4. Load Active AI Provider Config + Booking Settings + Active AI Worker
       const [{ data: aiConfigs }, { data: bookingSettings }, { data: activeAgentRow }, { data: tenantData }] = await Promise.all([
         supabase.from('ai_provider_configs').select('*').eq('tenant_id', tenantId),
@@ -821,7 +1117,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       const activeAgent = activeAgentRow || tenantData?.settings?.active_agent || (tenantData?.settings?.agents || []).find((a) => a.is_active) || null;
       const activeAI = (aiConfigs || []).find((c) => c.is_active) || (aiConfigs || [])[0];
 
-      // Fetch last 10 messages for conversational context
+      // Fetch last 10 messages for context
       const { data: pastMessages } = await supabase
         .from('messages')
         .select('sender, content')
@@ -829,7 +1125,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
         .order('created_at', { ascending: true })
         .limit(10);
 
-      // 5. Execute AI Turn with dynamic Agent Studio persona
+      // 5. Execute AI Turn
       const { replyText, score, isHandoffReady, bookingTriggered } = await generateAIResponse({
         provider: activeAI?.provider || 'gemini',
         apiKey: activeAI?.api_key || '',
@@ -846,13 +1142,16 @@ app.post('/webhook/whatsapp', async (req, res) => {
       });
 
       // Update lead score & status
-      const newStatus = score >= 75 ? 'hot' : score >= 45 ? 'warm' : 'qualifying';
+      const hotThreshold = activeAgent?.hot_threshold || 75;
+      const isHot = score >= hotThreshold;
+      const newStatus = isHot ? 'hot' : score >= 45 ? 'warm' : 'qualifying';
+
       await supabase
         .from('leads')
         .update({
           score,
           status: newStatus,
-          is_handoff_ready: isHandoffReady || false,
+          is_handoff_ready: isHandoffReady || isHot,
           last_contact_at: new Date().toISOString(),
         })
         .eq('id', lead.id);
@@ -867,10 +1166,10 @@ app.post('/webhook/whatsapp', async (req, res) => {
         channel: 'whatsapp',
       });
 
-      // 5b. If booking was triggered, write a booking record in Supabase (fixes issue #3)
+      // 5b. Booking trigger
       if (bookingTriggered && bookingSettings?.booking_url) {
-        const scheduledAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString(); // 2 days from now as placeholder
-        const { error: bookingErr } = await supabase.from('bookings').insert({
+        const scheduledAt = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+        await supabase.from('bookings').insert({
           tenant_id: tenantId,
           lead_id: lead.id,
           scheduled_at: scheduledAt,
@@ -878,15 +1177,18 @@ app.post('/webhook/whatsapp', async (req, res) => {
           meeting_url: bookingSettings.booking_url,
           status: 'confirmed',
           source_channel: 'whatsapp',
-          notes: `Booking link sent via WhatsApp AI. Lead self-scheduled via: ${bookingSettings.booking_url}`,
+          notes: `Booking link sent via WhatsApp AI: ${bookingSettings.booking_url}`,
+        }).catch(() => null);
+      }
+
+      // 5c. HOT LEAD AUTO-HANDOFF TRIGGER
+      if (isHot || isHandoffReady) {
+        await triggerHumanHandoff({
+          tenantId,
+          lead: { ...lead, score, status: newStatus },
+          reason: 'auto_hot_score',
+          conversationId: conv.id,
         });
-        if (bookingErr) {
-          console.error('[Booking Write Error]:', bookingErr);
-        } else {
-          console.log(`[Booking Created] Lead ${lead.id} booked via WhatsApp.`);
-        }
-        // Also update lead to is_handoff_ready
-        await supabase.from('leads').update({ is_handoff_ready: true }).eq('id', lead.id);
       }
 
       // 6. Send Reply to WhatsApp via Evolution API
@@ -894,7 +1196,7 @@ app.post('/webhook/whatsapp', async (req, res) => {
       console.log(`[WhatsApp Outbound] To ${senderPhone} (score=${score}, status=${newStatus}): "${replyText}"`);
 
       try {
-        const evoRes = await fetch(`${EVOLUTION_URL}/message/sendText/${instanceName}`, {
+        await fetch(`${EVOLUTION_URL}/message/sendText/${instanceName}`, {
           method: 'POST',
           headers: {
             apikey: sendApiKey,
@@ -906,14 +1208,11 @@ app.post('/webhook/whatsapp', async (req, res) => {
             text: replyText,
           }),
         });
-        const evoText = await evoRes.text();
-        console.log(`[WhatsApp Outbound Result] Status: ${evoRes.status}`);
-        if (evoRes.status !== 201) console.warn('[Outbound Body]:', evoText);
       } catch (err) {
         console.error('[WhatsApp Outbound Error]:', err);
       }
 
-      return res.json({ status: 'success', replied: true, score, bookingTriggered });
+      return res.json({ status: 'success', replied: true, score, isHot });
     }
 
     res.json({ status: 'ignored_event' });

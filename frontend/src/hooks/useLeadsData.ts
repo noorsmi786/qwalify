@@ -40,6 +40,7 @@ export function useLeadsData() {
         created_at: row.created_at,
         last_contact_at: row.last_contact_at,
         is_handoff_ready: row.is_handoff_ready,
+        bot_paused: row.bot_paused ?? row.metadata?.bot_paused ?? false,
       }));
     },
     initialData: localLeads,

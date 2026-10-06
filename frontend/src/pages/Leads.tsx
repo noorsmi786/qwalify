@@ -11,6 +11,10 @@ import {
   ChevronLeft,
   ChevronRight,
   X,
+  ShieldAlert,
+  Flame,
+  Bot,
+  UserCheck,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Lead, LeadStatus, ChannelType } from '@/types';
@@ -22,6 +26,7 @@ import { ScoreGauge } from '@/components/leads/ScoreGauge';
 import { LeadAvatar } from '@/components/leads/LeadAvatar';
 import { formatRelativeTime } from '@/lib/utils';
 import { AddLeadDrawer } from '@/components/leads/AddLeadDrawer';
+import { useLeadsData } from '@/hooks/useLeadsData';
 
 const ALL_STATUSES: LeadStatus[] = ['new', 'qualifying', 'hot', 'warm', 'cold', 'booked', 'cooled'];
 const ALL_CHANNELS: ChannelType[] = ['whatsapp', 'telegram', 'email', 'slack'];
@@ -35,7 +40,7 @@ const CHANNEL_LABELS: Record<ChannelType, string> = {
   whatsapp: 'WhatsApp', telegram: 'Telegram', email: 'Email', slack: 'Slack', manual: 'Manual',
 };
 
-import { useLeadsData } from '@/hooks/useLeadsData';
+type QuickFilter = 'all' | 'needs_attention' | 'hot' | 'booked';
 
 export default function LeadsPage() {
   const navigate = useNavigate();
@@ -50,8 +55,29 @@ export default function LeadsPage() {
     clearAllLeads,
   } = useLeadsStore();
 
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>('all');
+  const [sorting, setSorting] = useState<SortingState>([]);
+  const [showFilters, setShowFilters] = useState(false);
+  const [showDrawer, setShowDrawer] = useState(false);
+  const [pageIndex, setPageIndex] = useState(0);
+  const [pageSize, setPageSize] = useState(25);
+
+  const needsAttentionCount = useMemo(() => {
+    return liveLeads.filter((l) => l.bot_paused || l.is_handoff_ready || l.status === 'hot').length;
+  }, [liveLeads]);
+
   const filteredLeads = useMemo(() => {
     return liveLeads.filter((lead) => {
+      // Quick filter
+      if (quickFilter === 'needs_attention') {
+        const isNeedsAttention = lead.bot_paused || lead.is_handoff_ready || lead.status === 'hot';
+        if (!isNeedsAttention) return false;
+      } else if (quickFilter === 'hot') {
+        if (lead.status !== 'hot' && lead.score < 75) return false;
+      } else if (quickFilter === 'booked') {
+        if (lead.status !== 'booked') return false;
+      }
+
       const matchSearch =
         !filters.search ||
         lead.full_name.toLowerCase().includes(filters.search.toLowerCase()) ||
@@ -69,13 +95,7 @@ export default function LeadsPage() {
 
       return matchSearch && matchStatus && matchChannel && matchScore;
     });
-  }, [liveLeads, filters]);
-
-  const [sorting, setSorting] = useState<SortingState>([]);
-  const [showFilters, setShowFilters] = useState(false);
-  const [showDrawer, setShowDrawer] = useState(false);
-  const [pageIndex, setPageIndex] = useState(0);
-  const [pageSize, setPageSize] = useState(25);
+  }, [liveLeads, filters, quickFilter]);
 
   const activeFilterCount = filters.statuses.length + filters.channels.length;
 
@@ -99,7 +119,7 @@ export default function LeadsPage() {
 
   const COLUMNS: { key: keyof Lead | 'actions'; label: string; sortable?: boolean }[] = [
     { key: 'full_name', label: 'Name', sortable: true },
-    { key: 'status', label: 'Status', sortable: true },
+    { key: 'status', label: 'Status & Mode', sortable: true },
     { key: 'score', label: 'Score', sortable: true },
     { key: 'last_contact_at', label: 'Last Contact', sortable: true },
   ];
@@ -126,7 +146,7 @@ export default function LeadsPage() {
             {filteredLeads.length} total lead{filteredLeads.length !== 1 ? 's' : ''}
             {activeFilterCount > 0 && (
               <span className="ml-2 px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-400 text-xs">
-                {activeFilterCount} filter active
+                {activeFilterCount} custom filter active
               </span>
             )}
           </p>
@@ -145,6 +165,47 @@ export default function LeadsPage() {
             <Plus className="w-4 h-4 mr-1" /> Add Lead
           </Button>
         </div>
+      </div>
+
+      {/* Quick Filter Tabs (Needs Attention / Hot / Booked) */}
+      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+        <button
+          onClick={() => { setQuickFilter('all'); setPageIndex(0); }}
+          className={`px-3.5 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+            quickFilter === 'all'
+              ? 'bg-violet-600/20 text-violet-300 border-violet-500/40 shadow-[0_0_12px_rgba(124,58,237,0.15)]'
+              : 'bg-navy-900/60 text-slate-400 border-navy-700 hover:text-slate-200'
+          }`}
+        >
+          All Leads ({liveLeads.length})
+        </button>
+        <button
+          onClick={() => { setQuickFilter('needs_attention'); setPageIndex(0); }}
+          className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+            quickFilter === 'needs_attention'
+              ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-[0_0_15px_rgba(245,158,11,0.15)]'
+              : 'bg-navy-900/60 text-slate-400 border-navy-700 hover:text-amber-300 hover:border-amber-500/30'
+          }`}
+        >
+          <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+          <span>🔥 Needs Attention</span>
+          {needsAttentionCount > 0 && (
+            <span className="px-1.5 py-0.2 rounded-full bg-amber-500/30 text-amber-200 text-[10px] font-bold">
+              {needsAttentionCount}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => { setQuickFilter('hot'); setPageIndex(0); }}
+          className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold border transition-all ${
+            quickFilter === 'hot'
+              ? 'bg-red-500/20 text-red-300 border-red-500/50 shadow-[0_0_15px_rgba(239,68,68,0.15)]'
+              : 'bg-navy-900/60 text-slate-400 border-navy-700 hover:text-red-300 hover:border-red-500/30'
+          }`}
+        >
+          <Flame className="w-3.5 h-3.5 text-red-400" />
+          <span>Hot Leads</span>
+        </button>
       </div>
 
       {/* Search + Filter bar */}
@@ -273,7 +334,7 @@ export default function LeadsPage() {
                         <div>
                           <p className="text-sm font-semibold text-slate-200">No leads in your pipeline yet</p>
                           <p className="text-xs text-slate-400 mt-1">
-                            Add a new lead manually or connect WhatsApp in Settings to receive leads automatically.
+                            Add a new lead manually or connect WhatsApp to receive leads automatically.
                           </p>
                         </div>
                         <div className="flex items-center gap-2 pt-2">
@@ -290,50 +351,64 @@ export default function LeadsPage() {
                         <div className="w-12 h-12 rounded-xl bg-navy-700 flex items-center justify-center text-2xl">
                           🔍
                         </div>
-                        <p className="text-sm text-slate-500">No leads match your filters</p>
-                        <Button variant="ghost" size="sm" onClick={resetFilters}>
-                          Clear filters
+                        <p className="text-sm text-slate-500">No leads match your selected filters</p>
+                        <Button variant="ghost" size="sm" onClick={() => { resetFilters(); setQuickFilter('all'); }}>
+                          Reset all filters
                         </Button>
                       </div>
                     )}
                   </td>
                 </tr>
               ) : (
-                pageLeads.map((lead, i) => (
-                  <motion.tr
-                    key={lead.id}
-                    initial={{ opacity: 0, x: -8 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ delay: i * 0.03, duration: 0.2 }}
-                    className="border-b border-navy-700/60 hover:bg-navy-700/30 cursor-pointer transition-colors"
-                    onClick={() => navigate(`/leads/${lead.id}`)}
-                  >
-                    {/* 1. Lead name + contact */}
-                    <td className="px-4 py-3.5">
-                      <div className="flex items-center gap-3">
-                        <LeadAvatar name={lead.full_name} size="sm" />
-                        <div>
-                          <p className="text-sm font-medium text-slate-200">{lead.full_name}</p>
-                          <p className="text-xs text-slate-500">{lead.contact}</p>
+                pageLeads.map((lead, i) => {
+                  const isPaused = lead.bot_paused || lead.is_handoff_ready;
+                  return (
+                    <motion.tr
+                      key={lead.id}
+                      initial={{ opacity: 0, x: -8 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      transition={{ delay: i * 0.03, duration: 0.2 }}
+                      className="border-b border-navy-700/60 hover:bg-navy-700/30 cursor-pointer transition-colors"
+                      onClick={() => navigate(`/leads/${lead.id}`)}
+                    >
+                      {/* 1. Lead name + contact */}
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-3">
+                          <LeadAvatar name={lead.full_name} size="sm" />
+                          <div>
+                            <p className="text-sm font-medium text-slate-200">{lead.full_name}</p>
+                            <p className="text-xs text-slate-500">{lead.contact}</p>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    {/* 2. Status */}
-                    <td className="px-4 py-3.5">
-                      <StatusBadge status={lead.status} />
-                    </td>
-                    {/* 3. Score */}
-                    <td className="px-4 py-3.5">
-                      <ScoreGauge score={lead.score} size="sm" />
-                    </td>
-                    {/* 4. Last contact */}
-                    <td className="px-4 py-3.5">
-                      <span className="text-xs text-slate-400 whitespace-nowrap">
-                        {formatRelativeTime(lead.last_contact_at)}
-                      </span>
-                    </td>
-                  </motion.tr>
-                ))
+                      </td>
+                      {/* 2. Status & Mode (AI vs Bot Paused) */}
+                      <td className="px-4 py-3.5">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <StatusBadge status={lead.status} />
+                          {isPaused ? (
+                            <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 font-semibold flex items-center gap-1">
+                              <UserCheck className="w-2.5 h-2.5" /> Human Taking Over
+                            </span>
+                          ) : (
+                            <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-navy-800 text-slate-500 font-medium flex items-center gap-1">
+                              <Bot className="w-2.5 h-2.5 text-violet-400" /> AI Active
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      {/* 3. Score */}
+                      <td className="px-4 py-3.5">
+                        <ScoreGauge score={lead.score} size="sm" />
+                      </td>
+                      {/* 4. Last contact */}
+                      <td className="px-4 py-3.5">
+                        <span className="text-xs text-slate-400 whitespace-nowrap">
+                          {formatRelativeTime(lead.last_contact_at)}
+                        </span>
+                      </td>
+                    </motion.tr>
+                  );
+                })
               )}
             </tbody>
           </table>

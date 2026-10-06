@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   LineChart,
@@ -14,11 +14,14 @@ import {
   Mail,
   Tag,
   ChevronDown,
-  AlertTriangle,
   UserCheck,
   Bot,
   User,
   Send,
+  Loader2,
+  ShieldAlert,
+  Play,
+  CheckCircle2,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
@@ -30,6 +33,7 @@ import { LeadAvatar } from '@/components/leads/LeadAvatar';
 import { FollowUpStatusPanel } from '@/components/leads/FollowUpStatusPanel';
 import { formatDate, formatTime, STATUS_CONFIG, getScoreColor } from '@/lib/utils';
 import type { LeadStatus, Message } from '@/types';
+import { toast } from 'sonner';
 
 const ALL_STATUSES: LeadStatus[] = ['new', 'qualifying', 'hot', 'warm', 'cold', 'booked', 'cooled'];
 
@@ -55,12 +59,14 @@ function ChatBubble({ message }: { message: Message }) {
             {isAI ? (
               <>
                 <Bot className="w-3 h-3 text-violet-400" />
-                <span className="text-[10px] text-violet-400 font-medium">AI</span>
+                <span className="text-[10px] text-violet-400 font-medium">AI SDR</span>
               </>
             ) : (
               <>
                 <UserCheck className="w-3 h-3 text-teal-400" />
-                <span className="text-[10px] text-teal-400 font-medium">Human</span>
+                <span className="text-[10px] text-teal-400 font-semibold bg-teal-500/10 border border-teal-500/20 px-1.5 py-0.2 rounded">
+                  Human Rep
+                </span>
               </>
             )}
           </div>
@@ -71,7 +77,7 @@ function ChatBubble({ message }: { message: Message }) {
               ? 'bg-navy-700 border border-navy-600 text-slate-300 rounded-tl-sm'
               : isAI
               ? 'bg-violet-600/20 border border-violet-500/30 text-slate-200 rounded-tr-sm'
-              : 'bg-teal-500/15 border border-teal-500/25 text-slate-200 rounded-tr-sm'
+              : 'bg-teal-500/20 border border-teal-500/40 text-teal-100 font-medium rounded-tr-sm shadow-[0_0_15px_rgba(20,184,166,0.1)]'
           }`}
         >
           {message.content}
@@ -87,10 +93,28 @@ import { useLeadDetailData } from '@/hooks/useLeadDetailData';
 export default function LeadDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
-  const { lead, messages, scoreHistory, isLoading, updateStatus } = useLeadDetailData(id);
+  const {
+    lead,
+    messages,
+    scoreHistory,
+    isLoading,
+    updateStatus,
+    sendManualReply,
+    isSendingReply,
+    triggerHandoff,
+    isTriggeringHandoff,
+    resolveHandoff,
+    isResolvingHandoff,
+  } = useLeadDetailData(id);
 
   const [statusOpen, setStatusOpen] = useState(false);
   const [manualOverride, setManualOverride] = useState(false);
+  const [replyText, setReplyText] = useState('');
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages.length]);
 
   if (!lead && !isLoading) {
     return (
@@ -118,43 +142,88 @@ export default function LeadDetailPage() {
     setStatusOpen(false);
   };
 
+  const handleSendReply = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!replyText.trim() || isSendingReply) return;
+    const text = replyText.trim();
+    setReplyText('');
+    try {
+      await sendManualReply(text);
+      toast.success('Message sent to lead on ' + (lead.source_channel || 'WhatsApp'));
+    } catch {
+      toast.error('Failed to send reply. Please try again.');
+    }
+  };
+
+  const isBotPaused = lead.bot_paused || lead.is_handoff_ready;
+
   return (
     <div className="flex flex-col h-full">
-      {/* Breadcrumb */}
-      <div className="px-6 py-4 border-b border-navy-700 flex items-center gap-3">
-        <button
-          onClick={() => navigate('/leads')}
-          className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-violet-400 transition-colors"
-        >
-          <ArrowLeft className="w-4 h-4" />
-          Leads
-        </button>
-        <span className="text-slate-700">/</span>
-        <span className="text-sm text-slate-300 font-medium">{lead.full_name}</span>
-        {manualOverride && (
-          <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400">
-            Manual override
-          </span>
-        )}
+      {/* Breadcrumb & Header Bar */}
+      <div className="px-6 py-4 border-b border-navy-700 flex items-center justify-between gap-3 bg-navy-950/60">
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => navigate('/leads')}
+            className="flex items-center gap-1.5 text-sm text-slate-500 hover:text-violet-400 transition-colors"
+          >
+            <ArrowLeft className="w-4 h-4" />
+            Leads
+          </button>
+          <span className="text-slate-700">/</span>
+          <span className="text-sm text-slate-300 font-medium">{lead.full_name}</span>
+          {manualOverride && (
+            <span className="text-xs px-2 py-0.5 rounded-full bg-amber-500/10 border border-amber-500/20 text-amber-400">
+              Manual override
+            </span>
+          )}
+        </div>
+
+        {/* Handoff State Controls */}
+        <div className="flex items-center gap-2">
+          {isBotPaused ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => resolveHandoff()}
+              loading={isResolvingHandoff}
+              className="border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10 text-xs"
+            >
+              <Play className="w-3.5 h-3.5 mr-1" /> Resume AI Bot
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => triggerHandoff()}
+              loading={isTriggeringHandoff}
+              className="text-xs"
+            >
+              <ShieldAlert className="w-3.5 h-3.5 text-amber-400 mr-1" /> Claim & Pause Bot
+            </Button>
+          )}
+        </div>
       </div>
 
-      {/* Handoff banner */}
-      {lead.is_handoff_ready && (
+      {/* Human Handoff Active Banner */}
+      {isBotPaused && (
         <motion.div
           initial={{ height: 0, opacity: 0 }}
           animate={{ height: 'auto', opacity: 1 }}
-          className="px-6 py-3 bg-emerald-500/8 border-b border-emerald-500/20 flex items-center justify-between"
+          className="px-6 py-3 bg-amber-500/10 border-b border-amber-500/25 flex items-center justify-between"
         >
           <div className="flex items-center gap-2.5">
-            <AlertTriangle className="w-4 h-4 text-emerald-400" />
-            <span className="text-sm font-medium text-emerald-400">
-              This lead is ready for human handoff — score is{' '}
-              <span className="font-mono">{lead.score}/100</span>
+            <ShieldAlert className="w-4 h-4 text-amber-400 flex-shrink-0" />
+            <span className="text-xs sm:text-sm font-medium text-amber-300">
+              <strong>Bot is Paused (Human Takeover Active):</strong> AI auto-replies are paused for this lead. You can reply manually below or from Telegram.
             </span>
           </div>
-          <Button variant="outline" size="sm" className="border-emerald-500/40 text-emerald-400 hover:bg-emerald-500/10">
-            <UserCheck className="w-3.5 h-3.5" /> Assign to Rep
-          </Button>
+          <button
+            onClick={() => resolveHandoff()}
+            disabled={isResolvingHandoff}
+            className="text-xs font-semibold text-emerald-400 hover:text-emerald-300 underline flex items-center gap-1 flex-shrink-0"
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" /> Mark Resolved
+          </button>
         </motion.div>
       )}
 
@@ -176,8 +245,13 @@ export default function LeadDetailPage() {
                   )}
                   <span className="text-xs text-slate-500">{lead.contact}</span>
                 </div>
-                <div className="mt-2">
+                <div className="mt-2 flex items-center gap-1.5">
                   <ChannelBadge channel={lead.source_channel} />
+                  {isBotPaused && (
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-semibold">
+                      Human Taking Over
+                    </span>
+                  )}
                 </div>
               </div>
 
@@ -306,24 +380,27 @@ export default function LeadDetailPage() {
               <span>Last contact</span>
               <span className="text-slate-500">{formatDate(lead.last_contact_at)}</span>
             </div>
-            {lead.assigned_rep && (
-              <div className="flex justify-between">
-                <span>Assigned to</span>
-                <span className="text-slate-500">{lead.assigned_rep}</span>
-              </div>
-            )}
           </div>
         </div>
 
         {/* Right panel — Conversation */}
         <div className="flex-1 flex flex-col min-h-0">
-          <div className="px-6 py-3 border-b border-navy-700 flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
-            <p className="text-sm font-medium text-slate-300">Conversation</p>
-            <span className="text-xs text-slate-600">via {lead.source_channel}</span>
-            <div className="ml-auto flex items-center gap-1.5 text-xs text-slate-500">
-              <Bot className="w-3.5 h-3.5 text-violet-400" />
-              <span className="text-violet-400">AI-managed</span>
+          <div className="px-6 py-3 border-b border-navy-700 flex items-center justify-between bg-navy-900/50">
+            <div className="flex items-center gap-2">
+              <div className="w-2 h-2 rounded-full bg-teal-400 animate-pulse" />
+              <p className="text-sm font-medium text-slate-300">Conversation</p>
+              <span className="text-xs text-slate-500">via {lead.source_channel}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              {isBotPaused ? (
+                <span className="flex items-center gap-1 text-xs text-amber-400 font-semibold bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-md">
+                  <UserCheck className="w-3 h-3" /> Human Taking Over
+                </span>
+              ) : (
+                <span className="flex items-center gap-1 text-xs text-violet-400 font-medium bg-violet-600/10 border border-violet-500/20 px-2 py-0.5 rounded-md">
+                  <Bot className="w-3 h-3" /> AI SDR Active
+                </span>
+              )}
             </div>
           </div>
 
@@ -332,38 +409,53 @@ export default function LeadDetailPage() {
               <div className="w-14 h-14 rounded-2xl bg-navy-800 border border-navy-700 flex items-center justify-center text-2xl">
                 💬
               </div>
-              <p className="text-sm text-slate-500">No conversation yet</p>
-              <p className="text-xs text-slate-600 max-w-xs">
-                When this lead starts a conversation, messages will appear here.
+              <p className="text-sm font-semibold text-slate-200">No conversation history yet</p>
+              <p className="text-xs text-slate-500 max-w-xs">
+                Send a manual message below to initiate contact directly with this lead on {lead.source_channel || 'WhatsApp'}.
               </p>
             </div>
           ) : (
-            <>
-              <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                {messages.map((msg) => (
-                  <ChatBubble key={msg.id} message={msg} />
-                ))}
-              </div>
-
-              {/* Reply input (disabled in Phase 1) */}
-              <div className="px-6 py-4 border-t border-navy-700">
-                <div className="flex items-center gap-2 p-3 rounded-xl border border-navy-700 bg-navy-800/60">
-                  <input
-                    type="text"
-                    placeholder="Manual reply (available in Phase 3)…"
-                    disabled
-                    className="flex-1 bg-transparent text-sm text-slate-500 placeholder-slate-700 focus:outline-none disabled:cursor-not-allowed"
-                  />
-                  <button disabled className="w-8 h-8 rounded-lg bg-violet-600/20 border border-violet-500/20 flex items-center justify-center text-violet-600 opacity-40 cursor-not-allowed">
-                    <Send className="w-4 h-4" />
-                  </button>
-                </div>
-                <p className="text-[10px] text-slate-700 text-center mt-1.5">
-                  Channel integrations coming in Phase 3
-                </p>
-              </div>
-            </>
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {messages.map((msg) => (
+                <ChatBubble key={msg.id} message={msg} />
+              ))}
+              <div ref={messagesEndRef} />
+            </div>
           )}
+
+          {/* Live Interactive Manual Reply Bar */}
+          <form onSubmit={handleSendReply} className="p-4 border-t border-navy-700 bg-navy-950/80">
+            <div className="flex items-center gap-2 p-2 rounded-xl border border-navy-600 bg-navy-900 focus-within:border-teal-500/50 focus-within:ring-2 focus-within:ring-teal-500/20 transition-all">
+              <input
+                type="text"
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                placeholder={`Reply as Human to ${lead.full_name} on ${lead.source_channel || 'WhatsApp'} (will pause AI bot)…`}
+                className="flex-1 bg-transparent px-3 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none"
+              />
+              <Button
+                type="submit"
+                size="sm"
+                loading={isSendingReply}
+                disabled={!replyText.trim()}
+                className="bg-teal-600 hover:bg-teal-500 text-white shadow-md shadow-teal-600/20 flex-shrink-0 text-xs px-3"
+              >
+                {isSendingReply ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5 mr-1" /> Send
+                  </>
+                )}
+              </Button>
+            </div>
+            <div className="flex items-center justify-between text-[11px] text-slate-500 px-1 pt-1.5">
+              <span>Sending a manual reply automatically pauses AI auto-replies for this lead.</span>
+              {isBotPaused && (
+                <span className="text-amber-400 font-medium">⚠️ Bot is paused</span>
+              )}
+            </div>
+          </form>
         </div>
       </div>
     </div>

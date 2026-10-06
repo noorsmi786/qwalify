@@ -47,6 +47,20 @@ export interface Lead {
   created_at: string;
   last_contact_at: string;
   is_handoff_ready: boolean;
+  bot_paused?: boolean;
+}
+
+export interface HandoffEvent {
+  id: string;
+  tenant_id: string;
+  lead_id: string;
+  conversation_id?: string;
+  triggered_at: string;
+  reason: 'auto_hot_score' | 'manual_flag';
+  assigned_rep_id?: string;
+  status: 'pending' | 'claimed' | 'resolved';
+  resolved_at?: string;
+  summary?: string;
 }
 
 export interface ScoreHistory {
