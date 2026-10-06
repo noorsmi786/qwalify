@@ -1157,9 +1157,10 @@ At the very end of your response, output this exact JSON block:
     .replace(/[*_~`#>]+/g, '')
     .trim();
 
-  const sentences = replyText.match(/[^.!?]+[.!?](?:\s|$)|[^.!?]+$/g) || [];
-  if (sentences.length > 2) {
-    replyText = sentences.slice(0, 2).join(' ').trim();
+  // If the reply contains multiple paragraphs, take up to the first 2 paragraphs
+  const paragraphs = replyText.split(/\n+/).map((p) => p.trim()).filter(Boolean);
+  if (paragraphs.length > 2) {
+    replyText = paragraphs.slice(0, 2).join('\n\n');
   }
 
   return { replyText, score, scoreReason, isHandoffReady, bookingTriggered };
