@@ -15,7 +15,7 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import type { Lead, LeadStatus, ChannelType } from '@/types';
 import { useLeadsStore } from '@/store/leadsStore';
-import { StatusBadge, ChannelBadge } from '@/components/ui/Badge';
+import { StatusBadge } from '@/components/ui/Badge';
 import { Button } from '@/components/ui/Button';
 import { Input } from '@/components/ui/Input';
 import { ScoreGauge } from '@/components/leads/ScoreGauge';
@@ -98,11 +98,9 @@ export default function LeadsPage() {
   const pageLeads = sortedLeads.slice(pageIndex * pageSize, (pageIndex + 1) * pageSize);
 
   const COLUMNS: { key: keyof Lead | 'actions'; label: string; sortable?: boolean }[] = [
-    { key: 'full_name', label: 'Lead', sortable: true },
-    { key: 'source_channel', label: 'Channel', sortable: true },
+    { key: 'full_name', label: 'Name', sortable: true },
     { key: 'status', label: 'Status', sortable: true },
     { key: 'score', label: 'Score', sortable: true },
-    { key: 'assigned_rep', label: 'Assigned', sortable: false },
     { key: 'last_contact_at', label: 'Last Contact', sortable: true },
   ];
 
@@ -119,31 +117,32 @@ export default function LeadsPage() {
   };
 
   return (
-    <div className="p-6 space-y-4">
+    <div className="p-6 max-w-6xl mx-auto space-y-5">
       {/* Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-sm font-medium text-slate-500">
-            {filteredLeads.length} lead{filteredLeads.length !== 1 ? 's' : ''}
+          <h1 className="text-2xl font-bold text-slate-100">Leads Pipeline</h1>
+          <p className="text-sm text-slate-400 mt-0.5">
+            {filteredLeads.length} total lead{filteredLeads.length !== 1 ? 's' : ''}
             {activeFilterCount > 0 && (
               <span className="ml-2 px-2 py-0.5 rounded-full bg-violet-500/15 text-violet-400 text-xs">
-                {activeFilterCount} filter{activeFilterCount !== 1 ? 's' : ''} active
+                {activeFilterCount} filter active
               </span>
             )}
-          </h2>
+          </p>
         </div>
         <div className="flex items-center gap-2">
           {liveLeads.length === 0 ? (
-            <Button variant="secondary" size="sm" onClick={loadDemoLeads} className="text-xs">
+            <Button variant="ghost" size="sm" onClick={loadDemoLeads} className="text-xs text-slate-400 hover:text-slate-200">
               ✨ Load Sample Leads
             </Button>
           ) : (
             <Button variant="ghost" size="sm" onClick={clearAllLeads} className="text-xs text-slate-500 hover:text-red-400">
-              Clear All Leads
+              Clear All
             </Button>
           )}
-          <Button onClick={() => setShowDrawer(true)}>
-            <Plus className="w-4 h-4" /> Add Lead
+          <Button onClick={() => setShowDrawer(true)} className="shadow-lg shadow-violet-600/20">
+            <Plus className="w-4 h-4 mr-1" /> Add Lead
           </Button>
         </div>
       </div>
@@ -265,7 +264,7 @@ export default function LeadsPage() {
             <tbody>
               {pageLeads.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="px-4 py-16 text-center">
+                  <td colSpan={4} className="px-4 py-16 text-center">
                     {liveLeads.length === 0 ? (
                       <div className="flex flex-col items-center gap-3 max-w-sm mx-auto">
                         <div className="w-14 h-14 rounded-2xl bg-violet-500/10 border border-violet-500/20 text-violet-400 flex items-center justify-center text-2xl">
@@ -274,7 +273,7 @@ export default function LeadsPage() {
                         <div>
                           <p className="text-sm font-semibold text-slate-200">No leads in your pipeline yet</p>
                           <p className="text-xs text-slate-400 mt-1">
-                            Add a new lead manually or connect WhatsApp/Telegram in Settings to receive leads automatically.
+                            Add a new lead manually or connect WhatsApp in Settings to receive leads automatically.
                           </p>
                         </div>
                         <div className="flex items-center gap-2 pt-2">
@@ -309,8 +308,8 @@ export default function LeadsPage() {
                     className="border-b border-navy-700/60 hover:bg-navy-700/30 cursor-pointer transition-colors"
                     onClick={() => navigate(`/leads/${lead.id}`)}
                   >
-                    {/* Lead name + contact */}
-                    <td className="px-4 py-3">
+                    {/* 1. Lead name + contact */}
+                    <td className="px-4 py-3.5">
                       <div className="flex items-center gap-3">
                         <LeadAvatar name={lead.full_name} size="sm" />
                         <div>
@@ -319,25 +318,17 @@ export default function LeadsPage() {
                         </div>
                       </div>
                     </td>
-                    {/* Channel */}
-                    <td className="px-4 py-3">
-                      <ChannelBadge channel={lead.source_channel} />
-                    </td>
-                    {/* Status */}
-                    <td className="px-4 py-3">
+                    {/* 2. Status */}
+                    <td className="px-4 py-3.5">
                       <StatusBadge status={lead.status} />
                     </td>
-                    {/* Score */}
-                    <td className="px-4 py-3">
+                    {/* 3. Score */}
+                    <td className="px-4 py-3.5">
                       <ScoreGauge score={lead.score} size="sm" />
                     </td>
-                    {/* Assigned */}
-                    <td className="px-4 py-3">
-                      <span className="text-sm text-slate-400">{lead.assigned_rep ?? '—'}</span>
-                    </td>
-                    {/* Last contact */}
-                    <td className="px-4 py-3">
-                      <span className="text-xs text-slate-500 whitespace-nowrap">
+                    {/* 4. Last contact */}
+                    <td className="px-4 py-3.5">
+                      <span className="text-xs text-slate-400 whitespace-nowrap">
                         {formatRelativeTime(lead.last_contact_at)}
                       </span>
                     </td>

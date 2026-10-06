@@ -6,7 +6,6 @@ import {
   Clock,
   ExternalLink,
   Video,
-  Sparkles,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { Card, CardContent } from '@/components/ui/Card';
@@ -52,12 +51,10 @@ export default function BookingsPage() {
           </p>
         </div>
         <Button
-          variant="outline"
-          size="sm"
           onClick={() => navigate('/settings')}
-          className="text-xs"
+          className="shadow-lg shadow-violet-600/20"
         >
-          <Sparkles className="w-3.5 h-3.5" /> Configure Booking Link
+          <Calendar className="w-4 h-4 mr-1.5" /> Setup Booking Link
         </Button>
       </div>
 

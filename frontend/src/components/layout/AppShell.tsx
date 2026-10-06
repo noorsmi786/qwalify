@@ -6,7 +6,6 @@ import {
   Users,
   Calendar,
   Settings,
-  BookOpen,
   ChevronLeft,
   ChevronRight,
   Zap,
@@ -27,7 +26,6 @@ export const NAV_ITEMS = [
   { path: '/leads', label: 'Leads', icon: Users },
   { path: '/bookings', label: 'Appointments', icon: Calendar },
   { path: '/settings', label: 'Settings', icon: Settings },
-  { path: '/features', label: 'Features & Guide', icon: BookOpen },
 ];
 
 export function Sidebar() {
