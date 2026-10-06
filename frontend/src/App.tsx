@@ -5,6 +5,7 @@ import LandingPage from '@/pages/LandingPage';
 import DashboardPage from '@/pages/Dashboard';
 import LeadsPage from '@/pages/Leads';
 import LeadDetailPage from '@/pages/LeadDetail';
+import HandoffPage from '@/pages/Handoff';
 import SettingsPage from '@/pages/Settings';
 import BookingsPage from '@/pages/Bookings';
 import OnboardingPage from '@/pages/Onboarding';
@@ -42,6 +43,7 @@ export default function App() {
           <Route path="/studio" element={<AgentsStudio />} />
           <Route path="/leads" element={<LeadsPage />} />
           <Route path="/leads/:id" element={<LeadDetailPage />} />
+          <Route path="/handoff" element={<HandoffPage />} />
           <Route path="/bookings" element={<BookingsPage />} />
           <Route path="/settings" element={<SettingsPage />} />
           <Route path="/features" element={<FeaturesGuidePage />} />

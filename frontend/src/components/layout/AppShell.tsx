@@ -19,16 +19,18 @@ import {
   BookOpen,
   Repeat2,
   Radio,
+  ShieldAlert,
 } from 'lucide-react';
 import { useAuthStore } from '@/store/authStore';
 import { useUIStore } from '@/store/uiStore';
 import { cn } from '@/lib/utils';
 
-// Top-level nav items
+// Top-level nav items (Pipelines & Core Workflow)
 const TOP_NAV = [
   { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/agents', label: 'AI Workers', icon: Bot },
   { path: '/leads', label: 'Leads', icon: Users },
+  { path: '/handoff', label: 'Human Handoff', icon: ShieldAlert },
   { path: '/bookings', label: 'Appointments', icon: Calendar },
 ];
 
@@ -225,8 +227,7 @@ export function Sidebar() {
               className="flex items-center gap-2 px-3 py-2"
             >
               <div className="w-7 h-7 rounded-full gradient-brand flex items-center justify-center text-xs font-bold text-white flex-shrink-0">
-                {user?.full_name?.[0] ?? 'U'}
-              </div>
+                {user?.full_name?.[0] ?? 'U'}\n              </div>
               <div className="min-w-0">
                 <p className="text-xs font-medium text-slate-300 truncate">{user?.full_name || 'User'}</p>
                 <p className="text-[10px] text-slate-500 truncate">{user?.email}</p>
@@ -258,6 +259,7 @@ export function Navbar() {
     '/agents': 'AI Worker & Bot Studio',
     '/studio': 'AI Worker & Bot Studio',
     '/leads': 'Leads',
+    '/handoff': 'Human Handoff & Rep Queue',
     '/bookings': 'Appointments',
     '/settings': 'Settings',
     '/bot/personality': 'Personality & Tone',
@@ -477,7 +479,7 @@ export function MobileBottomNav() {
     { path: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
     { path: '/agents', label: 'Workers', icon: Bot },
     { path: '/leads', label: 'Leads', icon: Users },
-    { path: '/bot/channels', label: 'Channels', icon: Radio },
+    { path: '/handoff', label: 'Handoff', icon: ShieldAlert },
     { path: '/settings', label: 'Settings', icon: Settings },
   ];
 
