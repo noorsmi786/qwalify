@@ -26,6 +26,22 @@ export interface QualificationQuestion {
   idealAnswer?: string;
 }
 
+export interface FollowupStep {
+  id: string;
+  delayHours: number;
+  delayLabel: string;
+  template: string;
+}
+
+export interface FollowupConfig {
+  cadence: 'gentle' | 'balanced' | 'aggressive' | 'custom';
+  isCustom: boolean;
+  stopOnReply: boolean;
+  stopOnBooking: boolean;
+  onlyBusinessHours: boolean;
+  steps: FollowupStep[];
+}
+
 export interface AIAgent {
   id: string;
   tenant_id: string;
@@ -40,7 +56,8 @@ export interface AIAgent {
   qualification_rules: QualificationQuestion[];
   hot_threshold: number;
   warm_threshold: number;
-  followup_cadence?: 'gentle' | 'balanced' | 'aggressive';
+  followup_cadence?: 'gentle' | 'balanced' | 'aggressive' | 'custom';
+  followup_config?: FollowupConfig;
   business_description?: string;
   booking_url?: string;
   meeting_duration_mins: number;

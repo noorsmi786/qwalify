@@ -1,4 +1,4 @@
-﻿import { useState } from 'react';
+import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -132,7 +132,7 @@ export function SignupPage() {
     setSuccessMsg(null);
     try {
       await signup(data.email, data.password, data.companyName, data.fullName);
-      navigate('/dashboard');
+      navigate('/onboarding');
     } catch (err: any) {
       const msg = err?.message || 'Account creation failed. Please try again.';
       // If the message indicates success but needs sign-in, show as info not error

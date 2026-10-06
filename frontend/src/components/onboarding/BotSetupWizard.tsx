@@ -12,15 +12,100 @@ import {
   ChevronDown,
   ChevronUp,
   Settings,
+  Plus,
+  Trash2,
+  Clock,
+  ShieldCheck,
+  Sliders,
+  RotateCcw,
 } from 'lucide-react';
 import { Button } from '@/components/ui/Button';
 import { Card } from '@/components/ui/Card';
 import { useAuthStore } from '@/store/authStore';
 import { useAgents } from '@/hooks/useAgents';
 import { INDUSTRY_TEMPLATES } from '@/lib/ai/industryTemplates';
-import type { AIAgent, IndustryType, ToneType, EmojiStyle, KnowledgeItem, QualificationQuestion } from '@/types/agent';
+import type {
+  AIAgent,
+  IndustryType,
+  ToneType,
+  EmojiStyle,
+  KnowledgeItem,
+  QualificationQuestion,
+  FollowupStep,
+} from '@/types/agent';
 import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
+
+const PRESET_FOLLOWUP_STEPS: Record<'gentle' | 'balanced' | 'aggressive', FollowupStep[]> = {
+  gentle: [
+    {
+      id: 'step-1',
+      delayHours: 48,
+      delayLabel: '2 days',
+      template: 'Hi {name}! 👋 Just wanted to check if you had any questions or if there is anything else I can help you with.',
+    },
+    {
+      id: 'step-2',
+      delayHours: 168,
+      delayLabel: '7 days',
+      template: 'Hello {name}, hope you are having a wonderful week! Just leaving our booking link here in case you want to schedule whenever you are ready: {booking_url}',
+    },
+  ],
+  balanced: [
+    {
+      id: 'step-1',
+      delayHours: 24,
+      delayLabel: '24 hours (1 day)',
+      template: 'Hi {name}! 👋 Just following up on our chat. Did you have any more questions about our services?',
+    },
+    {
+      id: 'step-2',
+      delayHours: 72,
+      delayLabel: '3 days',
+      template: 'Hello {name}, checking in to see if you were still looking for assistance? Let me know if you would like to book a quick time to speak with our team!',
+    },
+    {
+      id: 'step-3',
+      delayHours: 168,
+      delayLabel: '7 days',
+      template: 'Hi {name}, I know things get busy! If you would still like to get started, you can pick a time directly here: {booking_url}. Have a great week!',
+    },
+  ],
+  aggressive: [
+    {
+      id: 'step-1',
+      delayHours: 2,
+      delayLabel: '2 hours',
+      template: 'Hi {name}! Just making sure you received my last message. Do you have 5 minutes to discuss your requirements?',
+    },
+    {
+      id: 'step-2',
+      delayHours: 24,
+      delayLabel: '24 hours (1 day)',
+      template: 'Good morning {name}! We have a few open consultation slots available today. Would you like me to reserve one for you?',
+    },
+    {
+      id: 'step-3',
+      delayHours: 72,
+      delayLabel: '3 days',
+      template: 'Hi {name}, are you still interested in moving forward? Let me know and I can hold a priority slot for you.',
+    },
+  ],
+};
+
+const DELAY_OPTIONS = [
+  { hours: 0.5, label: '30 minutes' },
+  { hours: 1, label: '1 hour' },
+  { hours: 2, label: '2 hours' },
+  { hours: 4, label: '4 hours' },
+  { hours: 12, label: '12 hours' },
+  { hours: 24, label: '24 hours (1 day)' },
+  { hours: 48, label: '2 days (48 hrs)' },
+  { hours: 72, label: '3 days' },
+  { hours: 120, label: '5 days' },
+  { hours: 168, label: '7 days (1 week)' },
+  { hours: 336, label: '14 days (2 weeks)' },
+];
 
 interface BotSetupWizardProps {
   initialAgent?: AIAgent | null;
@@ -67,9 +152,30 @@ export function BotSetupWizard({ initialAgent, onComplete, isStandalonePage = tr
   const [tone, setTone] = useState<ToneType>(initialAgent?.tone || 'friendly');
   const [emojiStyle, setEmojiStyle] = useState<EmojiStyle>(initialAgent?.emoji_style || 'subtle');
 
-  // ─── Step 4: Follow-up Persistence (3 Presets) ─────────────────────────────
-  const [followupCadence, setFollowupCadence] = useState<'gentle' | 'balanced' | 'aggressive'>(
+  // ─── Step 4: Follow-up Persistence & Customizer ───────────────────────────
+  const [followupCadence, setFollowupCadence] = useState<'gentle' | 'balanced' | 'aggressive' | 'custom'>(
     initialAgent?.followup_cadence || 'balanced'
+  );
+  const [isCustomFollowup, setIsCustomFollowup] = useState(
+    initialAgent?.followup_config?.isCustom || initialAgent?.followup_cadence === 'custom' || false
+  );
+  const [followupSteps, setFollowupSteps] = useState<FollowupStep[]>(() => {
+    if (initialAgent?.followup_config?.steps?.length) {
+      return initialAgent.followup_config.steps;
+    }
+    const initialPreset = (initialAgent?.followup_cadence && initialAgent.followup_cadence !== 'custom'
+      ? initialAgent.followup_cadence
+      : 'balanced') as 'gentle' | 'balanced' | 'aggressive';
+    return PRESET_FOLLOWUP_STEPS[initialPreset];
+  });
+  const [stopOnReply, setStopOnReply] = useState(
+    initialAgent?.followup_config?.stopOnReply ?? true
+  );
+  const [stopOnBooking, setStopOnBooking] = useState(
+    initialAgent?.followup_config?.stopOnBooking ?? true
+  );
+  const [onlyBusinessHours, setOnlyBusinessHours] = useState(
+    initialAgent?.followup_config?.onlyBusinessHours ?? true
   );
 
   // ─── Step 5: Booking & Appointments ────────────────────────────────────────
@@ -267,6 +373,74 @@ export function BotSetupWizard({ initialAgent, onComplete, isStandalonePage = tr
     }
   };
 
+  // ─── Follow-up Customizer Helpers ─────────────────────────────────────────
+  const handleSelectCadencePreset = (preset: 'gentle' | 'balanced' | 'aggressive') => {
+    setFollowupCadence(preset);
+    if (!isCustomFollowup) {
+      setFollowupSteps(PRESET_FOLLOWUP_STEPS[preset]);
+    }
+  };
+
+  const handleAddFollowupStep = () => {
+    if (followupSteps.length >= 5) {
+      toast.info('Maximum 5 follow-up steps recommended to maintain high response rates.');
+      return;
+    }
+    const defaultDelays = [2, 24, 72, 120, 168];
+    const delayH = defaultDelays[followupSteps.length] || 24;
+    const matchedOption = DELAY_OPTIONS.find((o) => o.hours === delayH) || { hours: delayH, label: `${delayH} hours` };
+
+    const newStep: FollowupStep = {
+      id: `step-${Date.now()}`,
+      delayHours: matchedOption.hours,
+      delayLabel: matchedOption.label,
+      template: `Hi {name}, just following up to see if you have any questions for ${businessName || 'our team'}!`,
+    };
+    setFollowupSteps((prev) => [...prev, newStep]);
+    setIsCustomFollowup(true);
+    setFollowupCadence('custom');
+  };
+
+  const handleRemoveFollowupStep = (indexToRemove: number) => {
+    if (followupSteps.length <= 1) {
+      toast.info('At least 1 follow-up message is required.');
+      return;
+    }
+    setFollowupSteps((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+    setIsCustomFollowup(true);
+    setFollowupCadence('custom');
+  };
+
+  const handleUpdateFollowupStep = (index: number, updates: Partial<FollowupStep>) => {
+    setFollowupSteps((prev) =>
+      prev.map((step, idx) => (idx === index ? { ...step, ...updates } : step))
+    );
+    setIsCustomFollowup(true);
+    setFollowupCadence('custom');
+  };
+
+  const handleInsertVariable = (index: number, variableTag: string) => {
+    setFollowupSteps((prev) =>
+      prev.map((step, idx) => {
+        if (idx !== index) return step;
+        return {
+          ...step,
+          template: step.template ? `${step.template} ${variableTag}` : variableTag,
+        };
+      })
+    );
+    setIsCustomFollowup(true);
+    setFollowupCadence('custom');
+  };
+
+  const handleResetToPreset = () => {
+    const preset = (followupCadence === 'custom' ? 'balanced' : followupCadence) as 'gentle' | 'balanced' | 'aggressive';
+    setFollowupCadence(preset);
+    setFollowupSteps(PRESET_FOLLOWUP_STEPS[preset]);
+    setIsCustomFollowup(false);
+    toast.info(`Reset follow-ups to ${preset} preset defaults.`);
+  };
+
   // Navigation handlers
   const handleNext = () => {
     if (currentStep === 1 && !businessName.trim()) {
@@ -306,7 +480,15 @@ export function BotSetupWizard({ initialAgent, onComplete, isStandalonePage = tr
         tone,
         emoji_style: emojiStyle,
         business_description: businessDescription,
-        followup_cadence: followupCadence,
+        followup_cadence: isCustomFollowup ? 'custom' : followupCadence,
+        followup_config: {
+          cadence: isCustomFollowup ? 'custom' : (followupCadence as any),
+          isCustom: isCustomFollowup,
+          stopOnReply,
+          stopOnBooking,
+          onlyBusinessHours,
+          steps: followupSteps,
+        },
         booking_url: bookingUrl.trim() || undefined,
         meeting_duration_mins: meetingDuration,
         qualification_rules: qualificationRules,
@@ -781,7 +963,7 @@ export function BotSetupWizard({ initialAgent, onComplete, isStandalonePage = tr
             </motion.div>
           )}
 
-          {/* STEP 4: FOLLOW-UP PERSISTENCE (3 PRESETS) */}
+          {/* STEP 4: FOLLOW-UP PERSISTENCE & CUSTOMIZER */}
           {currentStep === 4 && (
             <motion.div
               key="step-4"
@@ -796,11 +978,12 @@ export function BotSetupWizard({ initialAgent, onComplete, isStandalonePage = tr
                   How persistent should follow-ups be?
                 </h2>
                 <p className="text-xs text-slate-400">
-                  If a customer goes silent midway through a conversation, choose how often your assistant gently checks in before stopping.
+                  If a customer goes silent midway through a conversation, choose when and what your assistant sends to re-engage them.
                 </p>
               </div>
 
-              <div className="space-y-3">
+              {/* 3 Quick Presets */}
+              <div className="grid grid-cols-1 gap-2.5">
                 {[
                   {
                     id: 'gentle',
@@ -808,7 +991,7 @@ export function BotSetupWizard({ initialAgent, onComplete, isStandalonePage = tr
                     title: 'Gentle',
                     badge: 'Relaxed & Polite',
                     desc: 'Sends 1 reminder after 2 days, and 1 final friendly check-in after 1 week.',
-                    color: 'border-teal-500/30 text-teal-400',
+                    cadencePills: ['1st: After 2 days', '2nd: After 7 days'],
                   },
                   {
                     id: 'balanced',
@@ -816,7 +999,7 @@ export function BotSetupWizard({ initialAgent, onComplete, isStandalonePage = tr
                     title: 'Balanced (Recommended)',
                     badge: 'Best Conversion',
                     desc: 'Sends 1 check-in after 24 hours, 1 after 3 days, and 1 final follow-up after 7 days.',
-                    color: 'border-violet-500 text-violet-300',
+                    cadencePills: ['1st: After 24 hrs', '2nd: After 3 days', '3rd: After 7 days'],
                   },
                   {
                     id: 'aggressive',
@@ -824,32 +1007,269 @@ export function BotSetupWizard({ initialAgent, onComplete, isStandalonePage = tr
                     title: 'Aggressive',
                     badge: 'Fast Sales Pipeline',
                     desc: 'Sends 1 check-in after 2 hours, 1 after 24 hours, and 1 after 3 days. Best for high-intent inquiries.',
-                    color: 'border-red-500/30 text-red-400',
+                    cadencePills: ['1st: After 2 hrs', '2nd: After 24 hrs', '3rd: After 3 days'],
                   },
-                ].map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    onClick={() => setFollowupCadence(c.id as any)}
-                    className={cn(
-                      'w-full p-4 rounded-xl border text-left transition-all flex items-start gap-3.5',
-                      followupCadence === c.id
-                        ? 'bg-violet-600/20 border-violet-500 text-white shadow-md shadow-violet-600/10'
-                        : 'bg-navy-950/60 border-navy-800 text-slate-400 hover:text-slate-200'
-                    )}
-                  >
-                    <span className="text-2xl mt-0.5">{c.icon}</span>
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between">
-                        <p className="text-xs font-bold text-slate-100">{c.title}</p>
-                        <span className="text-[10px] px-2 py-0.5 rounded-full bg-navy-800 text-slate-300 border border-navy-700">
-                          {c.badge}
-                        </span>
+                ].map((c) => {
+                  const isSelected = followupCadence === c.id && !isCustomFollowup;
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => handleSelectCadencePreset(c.id as any)}
+                      className={cn(
+                        'w-full p-3.5 rounded-xl border text-left transition-all flex items-start gap-3.5 relative overflow-hidden',
+                        isSelected
+                          ? 'bg-violet-600/20 border-violet-500 text-white shadow-md shadow-violet-600/10'
+                          : 'bg-navy-950/60 border-navy-800 text-slate-400 hover:text-slate-200 hover:border-navy-700'
+                      )}
+                    >
+                      <span className="text-2xl mt-0.5">{c.icon}</span>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between mb-1">
+                          <p className="text-xs font-bold text-slate-100 flex items-center gap-2">
+                            {c.title}
+                            {isSelected && (
+                              <span className="text-[10px] text-violet-400 font-semibold flex items-center gap-1">
+                                <Check className="w-3 h-3" /> Active
+                              </span>
+                            )}
+                          </p>
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-navy-850 text-slate-300 border border-navy-700">
+                            {c.badge}
+                          </span>
+                        </div>
+                        <p className="text-xs text-slate-400 mb-2 leading-relaxed">{c.desc}</p>
+                        
+                        {/* Cadence Pills */}
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          {c.cadencePills.map((pill, idx) => (
+                            <span
+                              key={idx}
+                              className={cn(
+                                'text-[10px] px-2 py-0.5 rounded-md font-mono',
+                                isSelected
+                                  ? 'bg-violet-500/20 text-violet-300 border border-violet-500/30'
+                                  : 'bg-navy-900 text-slate-400 border border-navy-800'
+                              )}
+                            >
+                              {pill}
+                            </span>
+                          ))}
+                        </div>
                       </div>
-                      <p className="text-xs text-slate-400 mt-1 leading-relaxed">{c.desc}</p>
+                    </button>
+                  );
+                })}
+              </div>
+
+              {/* Customizer Expandable Section */}
+              <div className="border border-navy-700/80 bg-navy-950/90 rounded-2xl p-4 space-y-4">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-8 h-8 rounded-xl bg-violet-600/20 border border-violet-500/30 flex items-center justify-center text-violet-400">
+                      <Sliders className="w-4 h-4" />
                     </div>
-                  </button>
-                ))}
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs font-bold text-slate-200">Custom Sequence Builder</p>
+                        {isCustomFollowup && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-violet-600/30 text-violet-300 border border-violet-500/40 font-semibold">
+                            Custom Active ({followupSteps.length} steps)
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Tune individual message delays, text wording, and smart variables.
+                      </p>
+                    </div>
+                  </div>
+
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={() => setIsCustomFollowup(!isCustomFollowup)}
+                    className="text-xs flex items-center gap-1.5"
+                  >
+                    {isCustomFollowup ? (
+                      <>
+                        <ChevronUp className="w-3.5 h-3.5" /> Hide Custom Editor
+                      </>
+                    ) : (
+                      <>
+                        <Sliders className="w-3.5 h-3.5" /> Customize Messages
+                      </>
+                    )}
+                  </Button>
+                </div>
+
+                {isCustomFollowup && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: 'auto' }}
+                    exit={{ opacity: 0, height: 0 }}
+                    transition={{ duration: 0.25 }}
+                    className="space-y-4 pt-3 border-t border-navy-800"
+                  >
+                    {/* Step by Step List */}
+                    <div className="space-y-3">
+                      {followupSteps.map((step, idx) => (
+                        <div
+                          key={step.id || idx}
+                          className="p-3.5 rounded-xl bg-navy-900 border border-navy-800 space-y-2.5 relative"
+                        >
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-navy-800">
+                            <div className="flex items-center gap-2">
+                              <span className="w-5 h-5 rounded-full bg-violet-600/30 border border-violet-500/50 text-violet-300 text-[10px] font-bold flex items-center justify-center">
+                                {idx + 1}
+                              </span>
+                              <span className="text-xs font-bold text-slate-200">
+                                Follow-up #{idx + 1}
+                              </span>
+                            </div>
+
+                            {/* Delay Selector */}
+                            <div className="flex items-center gap-2">
+                              <span className="text-[11px] text-slate-400 flex items-center gap-1">
+                                <Clock className="w-3 h-3 text-slate-500" /> Send after:
+                              </span>
+                              <select
+                                value={step.delayHours}
+                                onChange={(e) => {
+                                  const hours = parseFloat(e.target.value);
+                                  const matched = DELAY_OPTIONS.find((o) => o.hours === hours);
+                                  handleUpdateFollowupStep(idx, {
+                                    delayHours: hours,
+                                    delayLabel: matched?.label || `${hours} hours`,
+                                  });
+                                }}
+                                className="bg-navy-950 border border-navy-700 text-slate-200 text-xs rounded-lg px-2.5 py-1 outline-none focus:border-violet-500"
+                              >
+                                {DELAY_OPTIONS.map((opt) => (
+                                  <option key={opt.hours} value={opt.hours}>
+                                    {opt.label}
+                                  </option>
+                                ))}
+                              </select>
+
+                              {followupSteps.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveFollowupStep(idx)}
+                                  className="p-1 text-slate-500 hover:text-red-400 transition-colors ml-1"
+                                  title="Delete this follow-up"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Message Template Textarea */}
+                          <div>
+                            <textarea
+                              value={step.template}
+                              onChange={(e) => handleUpdateFollowupStep(idx, { template: e.target.value })}
+                              rows={2}
+                              placeholder="Type your follow-up message..."
+                              className="w-full bg-navy-950 border border-navy-800 rounded-lg p-2.5 text-xs text-slate-200 placeholder-slate-600 outline-none focus:border-violet-500 resize-none leading-relaxed"
+                            />
+                            
+                            {/* Insertable variable tags */}
+                            <div className="flex flex-wrap items-center gap-1.5 mt-1.5">
+                              <span className="text-[10px] text-slate-500">Insert tag:</span>
+                              {[
+                                { tag: '{name}', label: 'Customer Name' },
+                                { tag: '{business}', label: 'Business Name' },
+                                { tag: '{booking_url}', label: 'Booking Link' },
+                              ].map((v) => (
+                                <button
+                                  key={v.tag}
+                                  type="button"
+                                  onClick={() => handleInsertVariable(idx, v.tag)}
+                                  className="text-[10px] font-mono px-2 py-0.5 rounded-md bg-navy-800 border border-navy-700 text-violet-300 hover:bg-violet-600/20 hover:border-violet-500/40 transition-colors"
+                                >
+                                  +{v.tag}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+
+                    {/* Add Step & Reset Buttons */}
+                    <div className="flex flex-col sm:flex-row items-center justify-between gap-2 pt-1">
+                      {followupSteps.length < 5 ? (
+                        <button
+                          type="button"
+                          onClick={handleAddFollowupStep}
+                          className="w-full sm:w-auto px-4 py-2 rounded-xl border border-dashed border-violet-500/40 hover:border-violet-400 bg-violet-600/10 hover:bg-violet-600/20 text-violet-300 text-xs font-semibold flex items-center justify-center gap-1.5 transition-all"
+                        >
+                          <Plus className="w-3.5 h-3.5" /> Add Another Follow-up (Max 5)
+                        </button>
+                      ) : (
+                        <span className="text-[11px] text-slate-500 italic">
+                          Maximum 5 follow-up attempts reached.
+                        </span>
+                      )}
+
+                      <button
+                        type="button"
+                        onClick={handleResetToPreset}
+                        className="text-xs text-slate-400 hover:text-slate-200 flex items-center gap-1 transition-colors"
+                      >
+                        <RotateCcw className="w-3 h-3" /> Reset to preset defaults
+                      </button>
+                    </div>
+
+                    {/* Automation Guardrails */}
+                    <div className="p-3.5 rounded-xl bg-navy-900/60 border border-navy-800/80 space-y-2.5 mt-3">
+                      <p className="text-[11px] font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                        Automation Safety Guardrails
+                      </p>
+
+                      <div className="space-y-2 text-xs">
+                        <label className="flex items-center gap-2.5 cursor-pointer text-slate-300 hover:text-slate-100">
+                          <input
+                            type="checkbox"
+                            checked={stopOnReply}
+                            onChange={(e) => setStopOnReply(e.target.checked)}
+                            className="w-4 h-4 rounded bg-navy-950 border-navy-700 text-violet-600 focus:ring-violet-500"
+                          />
+                          <span>
+                            <strong>Stop automatically on reply:</strong> Cancel remaining messages as soon as the lead answers.
+                          </span>
+                        </label>
+
+                        <label className="flex items-center gap-2.5 cursor-pointer text-slate-300 hover:text-slate-100">
+                          <input
+                            type="checkbox"
+                            checked={stopOnBooking}
+                            onChange={(e) => setStopOnBooking(e.target.checked)}
+                            className="w-4 h-4 rounded bg-navy-950 border-navy-700 text-violet-600 focus:ring-violet-500"
+                          />
+                          <span>
+                            <strong>Stop on appointment booked:</strong> Cancel follow-ups once a time slot is reserved.
+                          </span>
+                        </label>
+
+                        <label className="flex items-center gap-2.5 cursor-pointer text-slate-300 hover:text-slate-100">
+                          <input
+                            type="checkbox"
+                            checked={onlyBusinessHours}
+                            onChange={(e) => setOnlyBusinessHours(e.target.checked)}
+                            className="w-4 h-4 rounded bg-navy-950 border-navy-700 text-violet-600 focus:ring-violet-500"
+                          />
+                          <span>
+                            <strong>Business hours only (9 AM – 8 PM):</strong> Prevent late-night WhatsApp notifications.
+                          </span>
+                        </label>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
               </div>
             </motion.div>
           )}
