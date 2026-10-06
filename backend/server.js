@@ -311,6 +311,189 @@ app.post('/api/handoff/resolve', async (req, res) => {
   }
 });
 
+// ─── Test Alert Endpoint (Sends Immediate Test to Rep Telegram) ───────────────
+app.post('/api/handoff/test-alert', async (req, res) => {
+  try {
+    const { botToken, chatId, repName } = req.body;
+    if (!botToken || !chatId) {
+      return res.status(400).json({ error: 'botToken and chatId are required' });
+    }
+
+    const testText = `🔥 <b>[TEST NOTIFICATION] Qwalify Human Handoff</b>
+<b>Rep:</b> ${repName || 'Sales Rep'}
+<b>Status:</b> ✅ Successfully connected!
+
+When a hot prospect (score ≥ 75) is qualified or manually claimed, you will receive real-time alerts right here.
+You can reply directly in this chat to text the customer on WhatsApp.`;
+
+    const sent = await sendTelegramAlert({
+      token: botToken.trim(),
+      chatId: String(chatId).trim(),
+      text: testText,
+    });
+
+    if (sent) {
+      res.json({ success: true, ok: true, message: 'Test alert delivered' });
+    } else {
+      res.status(400).json({ error: 'Failed to send alert. Please verify your Bot Token and Chat ID.' });
+    }
+  } catch (err) {
+    console.error('[Test Alert Error]:', err);
+    res.status(500).json({ error: err.message || 'Error dispatching test alert' });
+  }
+});
+
+// ─── Telegram Rep Inbound Webhook (Captures Rep Replies on Telegram & Relays to WhatsApp) ───
+app.post('/webhook/telegram-rep', async (req, res) => {
+  try {
+    const update = req.body;
+    const msg = update?.message;
+    if (!msg || !msg.text) return res.json({ status: 'ignored_no_text' });
+
+    const chatId = String(msg.chat?.id);
+    const text = msg.text.trim();
+    const repName = msg.from?.first_name || 'Rep';
+
+    console.log(`[Telegram Rep Inbound] From Chat ID ${chatId} (${repName}): "${text}"`);
+
+    // 1. Find Tenant with this Rep Chat ID
+    let { data: repSetting } = await supabase
+      .from('rep_settings')
+      .select('tenant_id, bot_token')
+      .eq('notification_handle', chatId)
+      .eq('is_active', true)
+      .maybeSingle();
+
+    let tenantId = repSetting?.tenant_id;
+    let botToken = repSetting?.bot_token || process.env.TELEGRAM_BOT_TOKEN;
+
+    if (!tenantId) {
+      // Check channel_connections
+      const { data: conn } = await supabase
+        .from('channel_connections')
+        .select('tenant_id, config')
+        .eq('channel', 'telegram_rep_handoff')
+        .filter('config->>chat_id', 'eq', chatId)
+        .maybeSingle();
+
+      if (conn?.tenant_id) {
+        tenantId = conn.tenant_id;
+        botToken = conn.config?.bot_token || botToken;
+      }
+    }
+
+    if (!tenantId) {
+      // Check first tenant
+      const { data: firstTenant } = await supabase.from('tenants').select('id, settings').limit(1).maybeSingle();
+      tenantId = firstTenant?.id;
+    }
+
+    // 2. Check for /resolve command
+    if (text.startsWith('/resolve') || text.startsWith('/resolved')) {
+      // Find latest pending handoff event for this tenant
+      const { data: openHandoff } = await supabase
+        .from('handoff_events')
+        .select('id, lead_id')
+        .eq('tenant_id', tenantId)
+        .eq('status', 'pending')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+
+      if (openHandoff?.lead_id) {
+        await supabase.from('leads').update({ bot_paused: false, is_handoff_ready: false }).eq('id', openHandoff.lead_id);
+        await supabase.from('conversations').update({ state: 'active' }).eq('lead_id', openHandoff.lead_id);
+        await supabase.from('handoff_events').update({ status: 'resolved', resolved_at: new Date().toISOString() }).eq('id', openHandoff.id);
+
+        await sendTelegramAlert({
+          token: botToken,
+          chatId,
+          text: `✅ <b>Handoff Resolved!</b> AI bot auto-replies have been resumed for this lead.`,
+        });
+        return res.json({ status: 'resolved' });
+      } else {
+        await sendTelegramAlert({
+          token: botToken,
+          chatId,
+          text: `ℹ️ No active pending handoff found to resolve.`,
+        });
+        return res.json({ status: 'no_active_handoff' });
+      }
+    }
+
+    // 3. Regular message -> Relay to latest active lead on WhatsApp
+    const { data: activeHandoff } = await supabase
+      .from('handoff_events')
+      .select('id, lead_id')
+      .eq('tenant_id', tenantId)
+      .eq('status', 'pending')
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!activeHandoff?.lead_id) {
+      await sendTelegramAlert({
+        token: botToken,
+        chatId,
+        text: `ℹ️ You replied, but there is no active hot lead conversation awaiting takeover right now.`,
+      });
+      return res.json({ status: 'no_lead_target' });
+    }
+
+    const { data: lead } = await supabase.from('leads').select('*').eq('id', activeHandoff.lead_id).maybeSingle();
+    if (!lead) return res.json({ status: 'lead_not_found' });
+
+    // Send to WhatsApp via Evolution API
+    if (lead.source_channel === 'whatsapp' && lead.contact) {
+      const { data: conn } = await supabase
+        .from('channel_connections')
+        .select('config')
+        .eq('tenant_id', tenantId)
+        .eq('channel', 'whatsapp')
+        .maybeSingle();
+
+      const instanceName = conn?.config?.instance_name || 'qwalify-main';
+      const cleanPhone = lead.contact.replace(/\D/g, '');
+
+      await fetch(`${EVOLUTION_URL}/message/sendText/${instanceName}`, {
+        method: 'POST',
+        headers: {
+          apikey: EVOLUTION_API_KEY,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          number: cleanPhone,
+          text: text,
+        }),
+      }).catch((e) => console.warn('Evolution relay error:', e.message));
+
+      // Save message as sender: 'human'
+      const { data: conv } = await supabase.from('conversations').select('id').eq('lead_id', lead.id).maybeSingle();
+      if (conv?.id) {
+        await supabase.from('messages').insert({
+          tenant_id: tenantId,
+          conversation_id: conv.id,
+          lead_id: lead.id,
+          sender: 'human',
+          content: text,
+          channel: 'whatsapp',
+        });
+      }
+
+      await sendTelegramAlert({
+        token: botToken,
+        chatId,
+        text: `📨 <b>Relayed to ${lead.full_name} on WhatsApp!</b>`,
+      });
+    }
+
+    res.json({ status: 'relayed', leadId: lead.id });
+  } catch (err) {
+    console.error('[Telegram Rep Webhook Error]:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ─── Manual Reply Endpoint (Human Takeover) ───────────────────────────────────
 app.post('/api/leads/reply', async (req, res) => {
   try {
