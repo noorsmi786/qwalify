@@ -1,4 +1,5 @@
 import { useState, useEffect } from 'react';
+import { Link } from 'react-router-dom';
 import {
   Send,
   CheckCircle2,
@@ -7,9 +8,10 @@ import {
   Sparkles,
   ExternalLink,
   Radio,
-  Clock,
   Save,
   Loader2,
+  Phone,
+  AlertCircle,
 } from 'lucide-react';
 import { Card, CardContent } from '@/components/ui/Card';
 import { Button } from '@/components/ui/Button';
@@ -20,58 +22,97 @@ import { toast } from 'sonner';
 
 export function HandoffSettingsPanel() {
   const { tenant } = useAuthStore();
-  const [channel, setChannel] = useState<'telegram' | 'whatsapp' | 'slack'>('telegram');
-  const [botToken, setBotToken] = useState('');
-  const [chatId, setChatId] = useState('');
+
+  // Channel selections
+  const [telegramEnabled, setTelegramEnabled] = useState(true);
+  const [telegramBotToken, setTelegramBotToken] = useState('');
+  const [telegramChatId, setTelegramChatId] = useState('');
+
+  // WhatsApp Rep Alert
+  const [whatsAppEnabled, setWhatsAppEnabled] = useState(false);
+  const [whatsAppRepPhone, setWhatsAppRepPhone] = useState('');
+  const [isWhatsAppConnected, setIsWhatsAppConnected] = useState(false);
+  const [whatsAppInstance, setWhatsAppInstance] = useState<string | null>(null);
+
+  // Alert triggers & preferences
+  const [alertOnHotScore, setAlertOnHotScore] = useState(true);
+  const [alertOnManualFlag, setAlertOnManualFlag] = useState(true);
   const [autoPauseOnHot, setAutoPauseOnHot] = useState(true);
   const [forwardMessagesToRep, setForwardMessagesToRep] = useState(true);
 
   const [saving, setSaving] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testSuccess, setTestSuccess] = useState(false);
+  const [testingTelegram, setTestingTelegram] = useState(false);
+  const [telegramTestSuccess, setTelegramTestSuccess] = useState(false);
 
-  // Load existing settings
+  const [testingWhatsApp, setTestingWhatsApp] = useState(false);
+  const [whatsAppTestSuccess, setWhatsAppTestSuccess] = useState(false);
+
+  // Load existing settings & WhatsApp connection status
   useEffect(() => {
-    async function loadSettings() {
-      if (!tenant?.id) return;
-      if (isSupabaseConfigured) {
-        try {
-          // 1. Check channel_connections
-          const { data: conn } = await supabase
-            .from('channel_connections')
-            .select('config')
-            .eq('tenant_id', tenant.id)
-            .eq('channel', 'telegram_rep_handoff')
-            .maybeSingle();
+    async function loadConfig() {
+      if (!tenant?.id || !isSupabaseConfigured) return;
 
-          if (conn?.config) {
-            setBotToken(conn.config.bot_token || '');
-            setChatId(conn.config.chat_id || '');
-            setAutoPauseOnHot(conn.config.auto_pause ?? true);
-            setForwardMessagesToRep(conn.config.forward_messages ?? true);
-            return;
-          }
+      try {
+        // 1. Check if customer WhatsApp is connected in channel_connections
+        const { data: waConn } = await supabase
+          .from('channel_connections')
+          .select('*')
+          .eq('tenant_id', tenant.id)
+          .eq('channel', 'whatsapp')
+          .maybeSingle();
 
-          // 2. Check tenant settings
-          const { data: tenantData } = await supabase
-            .from('tenants')
-            .select('settings')
-            .eq('id', tenant.id)
-            .maybeSingle();
-
-          if (tenantData?.settings?.rep_settings) {
-            const s = tenantData.settings.rep_settings;
-            setBotToken(s.bot_token || '');
-            setChatId(s.chat_id || '');
-            setAutoPauseOnHot(s.auto_pause ?? true);
-            setForwardMessagesToRep(s.forward_messages ?? true);
-          }
-        } catch (e) {
-          console.warn('Error loading rep settings:', e);
+        if (waConn?.status === 'connected' || waConn?.config?.phone_number) {
+          setIsWhatsAppConnected(true);
+          setWhatsAppInstance(waConn.config?.instance_name || null);
         }
+
+        // 2. Check rep handoff settings
+        const { data: handoffConn } = await supabase
+          .from('channel_connections')
+          .select('config')
+          .eq('tenant_id', tenant.id)
+          .eq('channel', 'rep_handoff_settings')
+          .maybeSingle();
+
+        if (handoffConn?.config) {
+          const c = handoffConn.config;
+          setTelegramEnabled(c.telegram_enabled ?? true);
+          setTelegramBotToken(c.telegram_bot_token || '');
+          setTelegramChatId(c.telegram_chat_id || '');
+          setWhatsAppEnabled(c.whatsapp_enabled ?? false);
+          setWhatsAppRepPhone(c.whatsapp_rep_phone || '');
+          setAlertOnHotScore(c.alert_on_hot_score ?? true);
+          setAlertOnManualFlag(c.alert_on_manual_flag ?? true);
+          setAutoPauseOnHot(c.auto_pause_on_hot ?? true);
+          setForwardMessagesToRep(c.forward_messages_to_rep ?? true);
+          return;
+        }
+
+        // 3. Fallback: check tenant settings
+        const { data: tenantData } = await supabase
+          .from('tenants')
+          .select('settings')
+          .eq('id', tenant.id)
+          .maybeSingle();
+
+        if (tenantData?.settings?.rep_settings) {
+          const s = tenantData.settings.rep_settings;
+          setTelegramEnabled(s.telegram_enabled ?? true);
+          setTelegramBotToken(s.telegram_bot_token || '');
+          setTelegramChatId(s.telegram_chat_id || '');
+          setWhatsAppEnabled(s.whatsapp_enabled ?? false);
+          setWhatsAppRepPhone(s.whatsapp_rep_phone || '');
+          setAlertOnHotScore(s.alert_on_hot_score ?? true);
+          setAlertOnManualFlag(s.alert_on_manual_flag ?? true);
+          setAutoPauseOnHot(s.auto_pause_on_hot ?? true);
+          setForwardMessagesToRep(s.forward_messages_to_rep ?? true);
+        }
+      } catch (e) {
+        console.warn('Error loading handoff settings:', e);
       }
     }
-    loadSettings();
+
+    loadConfig();
   }, [tenant?.id]);
 
   const handleSave = async () => {
@@ -79,11 +120,15 @@ export function HandoffSettingsPanel() {
     setSaving(true);
     try {
       const config = {
-        bot_token: botToken.trim(),
-        chat_id: chatId.trim(),
-        auto_pause: autoPauseOnHot,
-        forward_messages: forwardMessagesToRep,
-        notification_channel: channel,
+        telegram_enabled: telegramEnabled,
+        telegram_bot_token: telegramBotToken.trim(),
+        telegram_chat_id: telegramChatId.trim(),
+        whatsapp_enabled: whatsAppEnabled,
+        whatsapp_rep_phone: whatsAppRepPhone.trim(),
+        alert_on_hot_score: alertOnHotScore,
+        alert_on_manual_flag: alertOnManualFlag,
+        auto_pause_on_hot: autoPauseOnHot,
+        forward_messages_to_rep: forwardMessagesToRep,
         updated_at: new Date().toISOString(),
       };
 
@@ -91,25 +136,25 @@ export function HandoffSettingsPanel() {
         // Save to channel_connections
         await supabase.from('channel_connections').upsert({
           tenant_id: tenant.id,
-          channel: 'telegram_rep_handoff',
+          channel: 'rep_handoff_settings',
           status: 'connected',
           config,
           connected_at: new Date().toISOString(),
         }, { onConflict: 'tenant_id, channel' });
 
-        // Also save to tenant settings for redundancy
+        // Save to tenant settings for redundancy
         const { data: currentTenant } = await supabase.from('tenants').select('settings').eq('id', tenant.id).maybeSingle();
         const updatedSettings = {
           ...(currentTenant?.settings || {}),
           rep_settings: config,
-          rep_telegram_chat_id: chatId.trim(),
-          telegram_bot_token: botToken.trim(),
+          rep_telegram_chat_id: telegramChatId.trim(),
+          telegram_bot_token: telegramBotToken.trim(),
         };
 
         await supabase.from('tenants').update({ settings: updatedSettings }).eq('id', tenant.id);
       }
 
-      toast.success('Rep notification settings saved!');
+      toast.success('Handoff & Rep Alert settings saved!');
     } catch {
       toast.error('Failed to save settings. Please try again.');
     } finally {
@@ -117,18 +162,18 @@ export function HandoffSettingsPanel() {
     }
   };
 
-  const handleTestAlert = async () => {
-    if (!chatId.trim()) {
+  const handleTestTelegram = async () => {
+    if (!telegramChatId.trim()) {
       toast.error('Please enter your Telegram Chat ID first.');
       return;
     }
-    if (!botToken.trim()) {
-      toast.error('Please enter your Telegram Bot Token from @BotFather.');
+    if (!telegramBotToken.trim()) {
+      toast.error('Please enter your Telegram Bot Token.');
       return;
     }
 
-    setTesting(true);
-    setTestSuccess(false);
+    setTestingTelegram(true);
+    setTelegramTestSuccess(false);
 
     try {
       const res = await fetch('/api/handoff/test-alert', {
@@ -136,43 +181,57 @@ export function HandoffSettingsPanel() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           tenantId: tenant?.id,
-          botToken: botToken.trim(),
-          chatId: chatId.trim(),
+          botToken: telegramBotToken.trim(),
+          chatId: telegramChatId.trim(),
           repName: 'Sales Rep',
         }),
       });
 
       const data = await res.json();
       if (data.ok || data.success) {
-        setTestSuccess(true);
-        toast.success('Test notification sent! Check your Telegram app 📱');
+        setTelegramTestSuccess(true);
+        toast.success('Telegram test alert delivered! 📱');
       } else {
-        toast.error(`Telegram error: ${data.error || data.description || 'Could not send test message'}`);
+        toast.error(`Telegram error: ${data.error || data.description || 'Could not send alert'}`);
       }
     } catch {
-      // Direct client-side Telegram test fallback
-      try {
-        const directRes = await fetch(`https://api.telegram.org/bot${botToken.trim()}/sendMessage`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId.trim(),
-            text: `🔥 <b>[TEST ALERT] Qwalify Human Handoff</b>\n\n✅ Your Telegram notifications are connected successfully! When a lead reaches hot qualification or is manually flagged, you'll receive alerts right here.`,
-            parse_mode: 'HTML',
-          }),
-        });
-        const d = await directRes.json();
-        if (d.ok) {
-          setTestSuccess(true);
-          toast.success('Test notification sent to your Telegram! 🎉');
-        } else {
-          toast.error(`Telegram API error: ${d.description || 'Check your token & chat ID'}`);
-        }
-      } catch {
-        toast.error('Could not reach Telegram. Please verify your Bot Token.');
-      }
+      toast.error('Could not dispatch Telegram alert.');
     } finally {
-      setTesting(false);
+      setTestingTelegram(false);
+    }
+  };
+
+  const handleTestWhatsApp = async () => {
+    if (!whatsAppRepPhone.trim()) {
+      toast.error("Please enter the rep's WhatsApp phone number.");
+      return;
+    }
+
+    setTestingWhatsApp(true);
+    setWhatsAppTestSuccess(false);
+
+    try {
+      const res = await fetch('/api/handoff/test-whatsapp-alert', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          tenantId: tenant?.id,
+          repPhone: whatsAppRepPhone.trim(),
+          instanceName: whatsAppInstance,
+        }),
+      });
+
+      const data = await res.json();
+      if (data.success || data.ok) {
+        setWhatsAppTestSuccess(true);
+        toast.success('WhatsApp test alert delivered to rep! 💬');
+      } else {
+        toast.error(`WhatsApp error: ${data.error || 'Check that your WhatsApp channel is connected'}`);
+      }
+    } catch {
+      toast.error('Failed to send WhatsApp alert.');
+    } finally {
+      setTestingWhatsApp(false);
     }
   };
 
@@ -183,79 +242,54 @@ export function HandoffSettingsPanel() {
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-navy-700/80 pb-4">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-400 flex items-center justify-center text-xl flex-shrink-0">
-              🔥
+              ⚡
             </div>
             <div>
               <h3 className="text-base font-semibold text-slate-100 flex items-center gap-2">
-                Human Handoff & Rep Alerts
+                Handoff Alert Channels & Preferences
                 <span className="text-[10px] px-2 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-semibold">
-                  Instant Alerts
+                  Rep Notifications
                 </span>
               </h3>
               <p className="text-xs text-slate-400 mt-0.5">
-                Automatically pause AI bot and notify your sales reps when a lead is hot so they can close the deal.
+                Choose how your team gets alerted when a lead requires human closing.
               </p>
             </div>
           </div>
+
+          <Button
+            type="button"
+            size="sm"
+            onClick={handleSave}
+            loading={saving}
+            className="bg-amber-600 hover:bg-amber-500 text-white font-medium text-xs self-end sm:self-center"
+          >
+            {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
+            Save All Settings
+          </Button>
         </div>
 
-        {/* Channel Selector */}
-        <div className="space-y-2">
-          <p className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
-            Notification Channel
-          </p>
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            {/* Telegram (Live) */}
-            <button
-              onClick={() => setChannel('telegram')}
-              className={`p-3.5 rounded-xl border text-left transition-all ${
-                channel === 'telegram'
-                  ? 'border-sky-500/50 bg-sky-500/10 shadow-[0_0_15px_rgba(14,165,233,0.15)]'
-                  : 'border-navy-700 bg-navy-800/40 text-slate-400 hover:border-navy-600'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-lg">✈️</span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded bg-teal-500/20 text-teal-300 font-bold">
-                  ● Live
-                </span>
-              </div>
-              <p className="text-sm font-semibold text-slate-200">Telegram</p>
-              <p className="text-[11px] text-slate-400 mt-0.5">Instant alerts & 2-way chat relay</p>
-            </button>
-
-            {/* WhatsApp Rep Alert (Stub) */}
-            <div className="p-3.5 rounded-xl border border-navy-700 bg-navy-800/20 text-slate-500 opacity-60 cursor-not-allowed">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-lg">💬</span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded bg-navy-700 text-slate-400 flex items-center gap-1 font-mono">
-                  <Clock className="w-2.5 h-2.5" /> Coming Soon
-                </span>
-              </div>
-              <p className="text-sm font-semibold text-slate-300">WhatsApp Alert</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">Direct SMS/WhatsApp alert to rep</p>
-            </div>
-
-            {/* Slack (Stub) */}
-            <div className="p-3.5 rounded-xl border border-navy-700 bg-navy-800/20 text-slate-500 opacity-60 cursor-not-allowed">
-              <div className="flex items-center justify-between mb-1.5">
-                <span className="text-lg">#️⃣</span>
-                <span className="text-[10px] px-1.5 py-0.2 rounded bg-navy-700 text-slate-400 flex items-center gap-1 font-mono">
-                  <Clock className="w-2.5 h-2.5" /> Coming Soon
-                </span>
-              </div>
-              <p className="text-sm font-semibold text-slate-300">Slack Channel</p>
-              <p className="text-[11px] text-slate-500 mt-0.5">Post hot leads in team channel</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Telegram Configuration Form */}
+        {/* ─── 1. TELEGRAM ALERTS SECTION ─────────────────────────────────── */}
         <div className="p-5 rounded-2xl bg-navy-950/70 border border-navy-800 space-y-4">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-sky-400 uppercase tracking-wider flex items-center gap-1.5">
-              <Radio className="w-3.5 h-3.5" /> Rep Telegram Connection
-            </p>
+            <div className="flex items-center gap-2.5">
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={telegramEnabled}
+                  onChange={(e) => setTelegramEnabled(e.target.checked)}
+                  className="sr-only peer"
+                />
+                <div className="w-9 h-5 bg-navy-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-sky-500"></div>
+              </label>
+              <span className="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
+                <span>✈️ Telegram Alerts</span>
+                <span className="text-[10px] px-1.5 py-0.2 rounded bg-sky-500/20 text-sky-300 font-bold">
+                  Recommended
+                </span>
+              </span>
+            </div>
+
             <a
               href="https://t.me/BotFather"
               target="_blank"
@@ -266,107 +300,214 @@ export function HandoffSettingsPanel() {
             </a>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <Input
-                label="Telegram Bot API Token"
-                type="password"
-                placeholder="123456789:ABCdefGhI..."
-                value={botToken}
-                onChange={(e) => setBotToken(e.target.value)}
-                icon={<Key className="w-4 h-4 text-slate-500" />}
-              />
-              <p className="text-[10px] text-slate-500 mt-1">
-                Your custom Telegram bot used to send alert messages to reps.
-              </p>
-            </div>
+          {telegramEnabled && (
+            <div className="space-y-4 pt-2 border-t border-navy-800/80">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <Input
+                    label="Handoff Telegram Bot Token"
+                    type="password"
+                    placeholder="123456789:ABCdefGhI..."
+                    value={telegramBotToken}
+                    onChange={(e) => setTelegramBotToken(e.target.value)}
+                    icon={<Key className="w-4 h-4 text-slate-500" />}
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Dedicated bot token used to send real-time alerts to your sales reps.
+                  </p>
+                </div>
 
-            <div>
-              <Input
-                label="Rep's Telegram Chat ID"
-                placeholder="e.g. 123456789"
-                value={chatId}
-                onChange={(e) => setChatId(e.target.value)}
-                icon={<MessageSquare className="w-4 h-4 text-slate-500" />}
-              />
-              <p className="text-[10px] text-slate-500 mt-1">
-                Find your Chat ID by messaging <code className="text-sky-400">@userinfobot</code> on Telegram.
-              </p>
+                <div>
+                  <Input
+                    label="Rep's Telegram Chat ID"
+                    placeholder="e.g. 123456789"
+                    value={telegramChatId}
+                    onChange={(e) => setTelegramChatId(e.target.value)}
+                    icon={<MessageSquare className="w-4 h-4 text-slate-500" />}
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    Message <code className="text-sky-400">@userinfobot</code> on Telegram to get your numeric ID.
+                  </p>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3 pt-1">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleTestTelegram}
+                  loading={testingTelegram}
+                  className="text-xs"
+                >
+                  <Send className="w-3.5 h-3.5 mr-1 text-sky-400" />
+                  Test Telegram Alert
+                </Button>
+
+                {telegramTestSuccess && (
+                  <span className="text-xs text-teal-400 flex items-center gap-1">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> Telegram Alert Sent Successfully!
+                  </span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* ─── 2. WHATSAPP ALERTS SECTION (REUSES EXISTING CONNECTION) ─────── */}
+        <div className="p-5 rounded-2xl bg-navy-950/70 border border-navy-800 space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2.5">
+              <label className="relative inline-flex items-center cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={whatsAppEnabled}
+                  onChange={(e) => setWhatsAppEnabled(e.target.checked)}
+                  className="sr-only peer"
+                  disabled={!isWhatsAppConnected}
+                />
+                <div className={`w-9 h-5 bg-navy-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all ${
+                  isWhatsAppConnected ? 'peer-checked:bg-green-500' : 'opacity-40 cursor-not-allowed'
+                }`}></div>
+              </label>
+              <span className="text-sm font-semibold text-slate-200 flex items-center gap-1.5">
+                <span>💬 WhatsApp Rep Alerts</span>
+                {isWhatsAppConnected ? (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-green-500/20 text-green-300 font-bold">
+                    ● Authenticated via Channels
+                  </span>
+                ) : (
+                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-amber-500/20 text-amber-300 font-medium">
+                    Not Connected
+                  </span>
+                )}
+              </span>
             </div>
           </div>
 
-          {/* How It Works Checklist */}
-          <div className="p-3.5 rounded-xl bg-navy-900 border border-navy-800 space-y-2 text-xs text-slate-300">
-            <p className="font-semibold text-slate-200 flex items-center gap-1.5">
-              <Sparkles className="w-3.5 h-3.5 text-amber-400" /> How Human Handoff Works in 3 Steps:
-            </p>
-            <ul className="space-y-1 text-slate-400 pl-4 list-disc text-[11px] leading-relaxed">
-              <li>When a lead reaches a score of <strong>75/100 ("Hot")</strong>, the bot pauses auto-replies.</li>
-              <li>A Telegram alert is immediately sent to your Rep with an AI summary of what the lead wants.</li>
-              <li>The rep can <strong>reply directly inside Telegram</strong> — their message is relayed straight to the customer on WhatsApp!</li>
-            </ul>
-          </div>
+          {!isWhatsAppConnected ? (
+            <div className="p-3.5 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2 text-xs text-amber-300">
+                <AlertCircle className="w-4 h-4 flex-shrink-0" />
+                <span>To send alerts via WhatsApp, your WhatsApp instance must be connected first in Channels.</span>
+              </div>
+              <Link
+                to="/bot/channels"
+                className="text-xs font-semibold text-amber-400 hover:text-amber-300 underline whitespace-nowrap flex items-center gap-1"
+              >
+                Connect WhatsApp <ExternalLink className="w-3 h-3" />
+              </Link>
+            </div>
+          ) : (
+            whatsAppEnabled && (
+              <div className="space-y-4 pt-2 border-t border-navy-800/80">
+                <div>
+                  <Input
+                    label="Rep's WhatsApp Phone Number (with Country Code)"
+                    placeholder="e.g. +14155552671 or 923001234567"
+                    value={whatsAppRepPhone}
+                    onChange={(e) => setWhatsAppRepPhone(e.target.value)}
+                    icon={<Phone className="w-4 h-4 text-slate-500" />}
+                  />
+                  <p className="text-[10px] text-slate-500 mt-1">
+                    No re-pairing needed. Alerts will be automatically sent to this number through your connected WhatsApp connection.
+                  </p>
+                </div>
 
-          {/* Behavior Toggles */}
-          <div className="space-y-2.5 pt-1">
-            <label className="flex items-center gap-3 cursor-pointer">
+                <div className="flex items-center gap-3 pt-1">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleTestWhatsApp}
+                    loading={testingWhatsApp}
+                    className="text-xs"
+                  >
+                    <Send className="w-3.5 h-3.5 mr-1 text-green-400" />
+                    Test WhatsApp Alert
+                  </Button>
+
+                  {whatsAppTestSuccess && (
+                    <span className="text-xs text-green-400 flex items-center gap-1">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> WhatsApp Alert Delivered!
+                    </span>
+                  )}
+                </div>
+              </div>
+            )
+          )}
+        </div>
+
+        {/* ─── 3. ALERT PREFERENCES & AUTOMATION RULES ─────────────────────── */}
+        <div className="p-5 rounded-2xl bg-navy-950/70 border border-navy-800 space-y-3">
+          <p className="text-xs font-semibold text-amber-400 uppercase tracking-wider flex items-center gap-1.5">
+            <Radio className="w-3.5 h-3.5" /> Automation & Trigger Preferences
+          </p>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+            <label className="flex items-start gap-2.5 p-3 rounded-xl bg-navy-900 border border-navy-800 cursor-pointer hover:border-navy-700 transition-all">
+              <input
+                type="checkbox"
+                checked={alertOnHotScore}
+                onChange={(e) => setAlertOnHotScore(e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded accent-amber-500"
+              />
+              <div>
+                <p className="text-xs font-semibold text-slate-200">Alert on Hot Lead (Score $\ge 75$)</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Send alerts automatically when AI qualifies a hot prospect.</p>
+              </div>
+            </label>
+
+            <label className="flex items-start gap-2.5 p-3 rounded-xl bg-navy-900 border border-navy-800 cursor-pointer hover:border-navy-700 transition-all">
+              <input
+                type="checkbox"
+                checked={alertOnManualFlag}
+                onChange={(e) => setAlertOnManualFlag(e.target.checked)}
+                className="w-4 h-4 mt-0.5 rounded accent-amber-500"
+              />
+              <div>
+                <p className="text-xs font-semibold text-slate-200">Alert on Manual Takeover</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Trigger handoff when a rep manually claims a lead from the dashboard.</p>
+              </div>
+            </label>
+
+            <label className="flex items-start gap-2.5 p-3 rounded-xl bg-navy-900 border border-navy-800 cursor-pointer hover:border-navy-700 transition-all">
               <input
                 type="checkbox"
                 checked={autoPauseOnHot}
                 onChange={(e) => setAutoPauseOnHot(e.target.checked)}
-                className="w-4 h-4 rounded accent-amber-500"
+                className="w-4 h-4 mt-0.5 rounded accent-amber-500"
               />
-              <span className="text-xs text-slate-300 font-medium">
-                Auto-pause AI bot immediately when lead is scored Hot (Score $\ge 75$)
-              </span>
+              <div>
+                <p className="text-xs font-semibold text-slate-200">Auto-Pause Bot on Hot Lead</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Pause AI replies immediately so reps have full conversation control.</p>
+              </div>
             </label>
 
-            <label className="flex items-center gap-3 cursor-pointer">
+            <label className="flex items-start gap-2.5 p-3 rounded-xl bg-navy-900 border border-navy-800 cursor-pointer hover:border-navy-700 transition-all">
               <input
                 type="checkbox"
                 checked={forwardMessagesToRep}
                 onChange={(e) => setForwardMessagesToRep(e.target.checked)}
-                className="w-4 h-4 rounded accent-amber-500"
+                className="w-4 h-4 mt-0.5 rounded accent-amber-500"
               />
-              <span className="text-xs text-slate-300 font-medium">
-                Forward incoming customer messages to Rep's Telegram while bot is paused
-              </span>
+              <div>
+                <p className="text-xs font-semibold text-slate-200">Forward Customer Messages</p>
+                <p className="text-[11px] text-slate-400 mt-0.5">Send subsequent lead messages to Telegram while bot is paused.</p>
+              </div>
             </label>
           </div>
+        </div>
 
-          {/* Action Buttons */}
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-3 border-t border-navy-800">
-            <div className="flex items-center gap-2 w-full sm:w-auto">
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={handleTestAlert}
-                loading={testing}
-                className="w-full sm:w-auto text-xs"
-              >
-                <Send className="w-3.5 h-3.5 mr-1 text-sky-400" />
-                Send Test Alert
-              </Button>
-
-              {testSuccess && (
-                <span className="text-xs text-teal-400 flex items-center gap-1">
-                  <CheckCircle2 className="w-3.5 h-3.5" /> Alert Delivered!
-                </span>
-              )}
-            </div>
-
-            <Button
-              type="button"
-              size="sm"
-              onClick={handleSave}
-              loading={saving}
-              className="w-full sm:w-auto bg-amber-600 hover:bg-amber-500 text-white font-medium text-xs"
-            >
-              {saving ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Save className="w-3.5 h-3.5" />}
-              Save Handoff Settings
-            </Button>
-          </div>
+        {/* Footer info */}
+        <div className="p-3.5 rounded-xl bg-navy-900/60 border border-navy-800 flex items-center justify-between text-xs text-slate-400">
+          <span className="flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            Alert messages include the lead's name, source channel, qualification score, and AI summary.
+          </span>
+          <Button size="sm" onClick={handleSave} loading={saving} className="bg-amber-600 hover:bg-amber-500 text-white text-xs">
+            Save Changes
+          </Button>
         </div>
       </CardContent>
     </Card>

@@ -101,10 +101,31 @@ async function sendTelegramAlert({ token, chatId, text }) {
   }
 }
 
-// ─── Get Tenant Rep Settings (Telegram) ───────────────────────────────────────
+// ─── Get Tenant Rep Settings (Telegram & WhatsApp) ──────────────────────────
 async function getTenantRepSettings(tenantId) {
   try {
-    // 1. Check rep_settings table if exists
+    // 1. Check channel_connections for rep_handoff_settings
+    const { data: handoffConn } = await supabase
+      .from('channel_connections')
+      .select('config')
+      .eq('tenant_id', tenantId)
+      .eq('channel', 'rep_handoff_settings')
+      .maybeSingle();
+
+    if (handoffConn?.config) {
+      const c = handoffConn.config;
+      return {
+        telegramEnabled: c.telegram_enabled ?? true,
+        handle: c.telegram_chat_id || '',
+        botToken: c.telegram_bot_token || process.env.TELEGRAM_BOT_TOKEN,
+        whatsAppEnabled: c.whatsapp_enabled ?? false,
+        whatsAppRepPhone: c.whatsapp_rep_phone || '',
+        alertOnHotScore: c.alert_on_hot_score ?? true,
+        alertOnManualFlag: c.alert_on_manual_flag ?? true,
+      };
+    }
+
+    // 2. Check rep_settings table if exists
     const { data: repRow } = await supabase
       .from('rep_settings')
       .select('*')
@@ -114,19 +135,13 @@ async function getTenantRepSettings(tenantId) {
 
     if (repRow?.notification_handle) {
       return {
-        channel: repRow.notification_channel || 'telegram',
+        telegramEnabled: repRow.notification_channel === 'telegram',
         handle: repRow.notification_handle,
         botToken: repRow.bot_token || process.env.TELEGRAM_BOT_TOKEN,
+        whatsAppEnabled: repRow.notification_channel === 'whatsapp',
+        whatsAppRepPhone: repRow.notification_channel === 'whatsapp' ? repRow.notification_handle : '',
       };
     }
-
-    // 2. Check channel_connections for Telegram
-    const { data: tgConn } = await supabase
-      .from('channel_connections')
-      .select('config')
-      .eq('tenant_id', tenantId)
-      .eq('channel', 'telegram')
-      .maybeSingle();
 
     // 3. Check tenant settings
     const { data: tenant } = await supabase
@@ -135,19 +150,21 @@ async function getTenantRepSettings(tenantId) {
       .eq('id', tenantId)
       .maybeSingle();
 
-    const handle = tenant?.settings?.rep_telegram_chat_id || process.env.REP_TELEGRAM_CHAT_ID;
-    const botToken = tgConn?.config?.bot_token || tenant?.settings?.telegram_bot_token || process.env.TELEGRAM_BOT_TOKEN;
-
+    const repSettings = tenant?.settings?.rep_settings;
     return {
-      channel: 'telegram',
-      handle,
-      botToken,
+      telegramEnabled: repSettings?.telegram_enabled ?? true,
+      handle: repSettings?.telegram_chat_id || tenant?.settings?.rep_telegram_chat_id || process.env.REP_TELEGRAM_CHAT_ID,
+      botToken: repSettings?.telegram_bot_token || tenant?.settings?.telegram_bot_token || process.env.TELEGRAM_BOT_TOKEN,
+      whatsAppEnabled: repSettings?.whatsapp_enabled ?? false,
+      whatsAppRepPhone: repSettings?.whatsapp_rep_phone || '',
     };
   } catch {
     return {
-      channel: 'telegram',
+      telegramEnabled: true,
       handle: process.env.REP_TELEGRAM_CHAT_ID,
       botToken: process.env.TELEGRAM_BOT_TOKEN,
+      whatsAppEnabled: false,
+      whatsAppRepPhone: '',
     };
   }
 }
@@ -186,22 +203,53 @@ async function triggerHumanHandoff({ tenantId, lead, reason = 'auto_hot_score', 
       notes: JSON.stringify({ summary, auto_paused: true, source: lead.source_channel }),
     }).catch((e) => console.warn('[Handoff Event Insert Warn]:', e.message));
 
-    // 4. Dispatch Telegram alert to rep
+    // 4. Dispatch Telegram alert to rep if configured
     const repSettings = await getTenantRepSettings(tenantId);
-    if (repSettings?.handle && repSettings?.botToken) {
-      const dashboardLink = `https://qwalify.online/leads/${lead.id}`;
-      const alertText = `🔥 <b>Hot Lead Alert: ${lead.full_name}</b> (${lead.source_channel || 'WhatsApp'})
+    const dashboardLink = `https://qwalify.online/leads/${lead.id}`;
+    const alertText = `🔥 <b>Hot Lead Alert: ${lead.full_name}</b> (${lead.source_channel || 'WhatsApp'})
 <b>Score:</b> ${lead.score || 75}/100
 <b>Summary:</b> ${summary}
 
 👉 <b>Reply to this message</b> to text the lead directly, or <a href="${dashboardLink}">open dashboard</a>.
 To resume AI bot, send <code>/resolve</code>`;
 
+    if (repSettings?.telegramEnabled && repSettings?.handle && repSettings?.botToken) {
       await sendTelegramAlert({
         token: repSettings.botToken,
         chatId: repSettings.handle,
         text: alertText,
       });
+    }
+
+    // 4b. Dispatch WhatsApp alert to rep if enabled
+    if (repSettings?.whatsAppEnabled && repSettings?.whatsAppRepPhone) {
+      const { data: waConn } = await supabase
+        .from('channel_connections')
+        .select('config')
+        .eq('tenant_id', tenantId)
+        .eq('channel', 'whatsapp')
+        .maybeSingle();
+
+      const instanceName = waConn?.config?.instance_name || 'qwalify-main';
+      const cleanPhone = repSettings.whatsAppRepPhone.replace(/\D/g, '');
+      const waAlertText = `🔥 *Hot Lead Alert: ${lead.full_name}* (${lead.source_channel || 'WhatsApp'})\n*Score:* ${lead.score || 75}/100\n*Summary:* ${summary}\n\n👉 Open dashboard to respond: ${dashboardLink}`;
+
+      try {
+        await fetch(`${EVOLUTION_URL}/message/sendText/${instanceName}`, {
+          method: 'POST',
+          headers: {
+            apikey: EVOLUTION_API_KEY,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            number: cleanPhone,
+            text: waAlertText,
+          }),
+        });
+        console.log(`[WhatsApp Rep Alert Sent] to ${cleanPhone}`);
+      } catch (waErr) {
+        console.warn('[WhatsApp Rep Alert Error]:', waErr.message);
+      }
     }
 
     // 5. Fire outbound webhook
@@ -340,6 +388,53 @@ You can reply directly in this chat to text the customer on WhatsApp.`;
   } catch (err) {
     console.error('[Test Alert Error]:', err);
     res.status(500).json({ error: err.message || 'Error dispatching test alert' });
+  }
+});
+
+// ─── Test WhatsApp Alert Endpoint (Sends Immediate Test to Rep WhatsApp) ───────
+app.post('/api/handoff/test-whatsapp-alert', async (req, res) => {
+  try {
+    const { tenantId, repPhone, instanceName } = req.body;
+    if (!repPhone) {
+      return res.status(400).json({ error: 'repPhone is required' });
+    }
+
+    let targetInstance = instanceName;
+    if (!targetInstance && tenantId) {
+      const { data: waConn } = await supabase
+        .from('channel_connections')
+        .select('config')
+        .eq('tenant_id', tenantId)
+        .eq('channel', 'whatsapp')
+        .maybeSingle();
+      targetInstance = waConn?.config?.instance_name;
+    }
+    if (!targetInstance) targetInstance = 'qwalify-main';
+
+    const cleanPhone = repPhone.replace(/\D/g, '');
+    const testText = `🔥 *[TEST NOTIFICATION] Qwalify Human Handoff*\n*Status:* ✅ Connected!\n\nWhen a hot prospect (score ≥ 75) is qualified or manually claimed, you will receive real-time alerts right here.`;
+
+    const evoRes = await fetch(`${EVOLUTION_URL}/message/sendText/${targetInstance}`, {
+      method: 'POST',
+      headers: {
+        apikey: EVOLUTION_API_KEY,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        number: cleanPhone,
+        text: testText,
+      }),
+    });
+
+    if (evoRes.ok) {
+      res.json({ success: true, ok: true, message: 'WhatsApp test alert sent' });
+    } else {
+      const errText = await evoRes.text();
+      res.status(400).json({ error: `WhatsApp gateway returned error (${evoRes.status}): ${errText}` });
+    }
+  } catch (err) {
+    console.error('[WhatsApp Test Alert Error]:', err);
+    res.status(500).json({ error: err.message || 'Error sending WhatsApp alert' });
   }
 });
 

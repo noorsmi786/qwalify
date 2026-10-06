@@ -31,7 +31,7 @@ export default function HandoffPage() {
   const [activeTab, setActiveTab] = useState<'queue' | 'settings'>('queue');
   const [resolvingId, setResolvingId] = useState<string | null>(null);
 
-  // Filter for leads needing human attention (bot paused or hot)
+  // Filter for leads needing human attention (bot paused, handoff ready, or hot score)
   const handoffQueue = liveLeads.filter(
     (l) => l.bot_paused || l.is_handoff_ready || l.status === 'hot'
   );
@@ -75,10 +75,10 @@ export default function HandoffPage() {
         <div>
           <h1 className="text-2xl font-bold text-slate-100 flex items-center gap-2.5">
             <ShieldAlert className="w-6 h-6 text-amber-400" />
-            Human Handoff & Rep Queue
+            Human Handoff & Rep Alerts
           </h1>
           <p className="text-sm text-slate-400 mt-0.5">
-            Manage hot prospects requiring human closing, monitor paused bots, and configure Telegram rep alerts.
+            Manage hot prospects requiring human closing, monitor paused bots, and configure internal rep alerts.
           </p>
         </div>
 
@@ -93,7 +93,7 @@ export default function HandoffPage() {
             }`}
           >
             <Users className="w-3.5 h-3.5" />
-            <span>Handoff Queue</span>
+            <span>Needs Attention Queue</span>
             {handoffQueue.length > 0 && (
               <span className="px-1.5 py-0.2 rounded-full bg-amber-500 text-slate-950 text-[10px] font-bold">
                 {handoffQueue.length}
@@ -147,11 +147,13 @@ export default function HandoffPage() {
         <Card className="border-sky-500/20 bg-navy-900/60">
           <CardContent className="p-4 flex items-center justify-between">
             <div>
-              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Rep Alert Channel</p>
-              <p className="text-base font-bold text-sky-300 mt-1 flex items-center gap-1.5">
-                <span>✈️ Telegram Alerts</span>
+              <p className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Rep Alert Channels</p>
+              <p className="text-sm font-bold text-slate-200 mt-1 flex items-center gap-1.5">
+                <span>✈️ Telegram</span>
+                <span>•</span>
+                <span>💬 WhatsApp</span>
               </p>
-              <p className="text-[11px] text-teal-400 mt-0.5 font-medium">● 2-Way Message Relay Active</p>
+              <p className="text-[11px] text-teal-400 mt-0.5 font-medium">● Instant Notifications</p>
             </div>
             <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 text-sky-400 flex items-center justify-center text-lg">
               📲
@@ -166,11 +168,14 @@ export default function HandoffPage() {
           <div className="flex items-center justify-between">
             <h2 className="text-base font-semibold text-slate-200 flex items-center gap-2">
               <Flame className="w-4 h-4 text-amber-400" />
-              Active Handoff Queue ({handoffQueue.length})
+              Needs Attention Queue ({handoffQueue.length})
             </h2>
-            <span className="text-xs text-slate-400">
-              Leads scored Hot ($\ge 75$) or paused for human takeover
-            </span>
+            <button
+              onClick={() => setActiveTab('settings')}
+              className="text-xs text-violet-400 hover:text-violet-300 font-medium underline flex items-center gap-1"
+            >
+              <Settings2 className="w-3.5 h-3.5" /> Configure Telegram / WhatsApp alerts
+            </button>
           </div>
 
           {handoffQueue.length === 0 ? (
@@ -181,11 +186,14 @@ export default function HandoffPage() {
                 </div>
                 <h3 className="text-base font-semibold text-slate-200">No Pending Handoffs!</h3>
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Your AI SDR is actively qualifying all leads. When a lead reaches hot qualification or asks to speak with a human, they will instantly appear here and alert your Telegram.
+                  Your AI SDR is actively qualifying all leads. When a lead reaches hot qualification ($\ge 75$) or asks to speak with a human, they will appear here and alert your reps.
                 </p>
-                <div className="pt-2">
+                <div className="pt-2 flex items-center justify-center gap-3">
                   <Button size="sm" variant="secondary" onClick={() => navigate('/leads')}>
                     View All Leads Pipeline
+                  </Button>
+                  <Button size="sm" onClick={() => setActiveTab('settings')}>
+                    <Settings2 className="w-3.5 h-3.5 mr-1" /> Alert Settings
                   </Button>
                 </div>
               </div>
@@ -247,7 +255,7 @@ export default function HandoffPage() {
 
                   <div className="flex items-center justify-between text-[11px] text-slate-500 pt-2 border-t border-navy-800">
                     <span className="flex items-center gap-1 text-amber-400 font-medium">
-                      <Sparkles className="w-3 h-3" /> Ready for closing by human sales rep
+                      <Sparkles className="w-3 h-3" /> Ready for human closing • AI replies paused
                     </span>
                     <span>Last active {formatRelativeTime(lead.last_contact_at)}</span>
                   </div>
@@ -257,7 +265,7 @@ export default function HandoffPage() {
           )}
         </div>
       ) : (
-        /* Settings Tab */
+        /* Settings View */
         <div className="space-y-4">
           <HandoffSettingsPanel />
         </div>
